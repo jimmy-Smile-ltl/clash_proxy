@@ -2,17 +2,24 @@
 # 复制为 config/config.yaml 并替换为你的订阅内容（勿将真实订阅提交到仓库）
 #
 # 说明:
-#  - 节点来源可以是任何机场订阅 / 自建节点，经 mihomo 转换后粘贴到 proxies 段
+#  - 节点来源可以是任何机场订阅 / 自建节点，粘贴到 proxies 段即可
 #  - secret 必须与 .env 中的 CLASH_SECRET 一致
 #  - geoip.metadb / GeoSite.dat 请按 config/README.md 下载
+#  - 各字段详解见 docs/config-guide.md
+#
+# 两种部署的差异（本模板默认适配「本地 Clash 客户端」）:
+#  - 本地客户端: external-controller 保持 127.0.0.1:9090, 爬虫连 9090/代理端口
+#  - Docker 部署: 用 scripts/sync_config.sh 同步(自动改 0.0.0.0:9090 + allow-lan: true),
+#    或手动改 external-controller 为 '0.0.0.0:9090'、allow-lan 为 true;
+#    爬虫连 http://127.0.0.1:9099、代理端口 7777
 
-mixed-port: 7890
-allow-lan: false
+mixed-port: 7890          # 代理端口: 爬虫流量入口(Docker 映射为宿主 7777)
+allow-lan: false          # Docker 部署需改为 true
 bind-address: '*'
 mode: rule
 log-level: info
-external-controller: '127.0.0.1:9090'
-secret: "your-secret-here"
+external-controller: '127.0.0.1:9090'   # RESTful API: 本项目管理节点靠它(Docker 映射为宿主 9099)
+secret: "your-secret-here"              # API 密钥: 与 .env 的 CLASH_SECRET 一致
 unified-delay: true
 tcp-concurrent: true
 ipv6: false
@@ -27,6 +34,7 @@ dns:
   nameserver: [223.5.5.5, 119.29.29.29]
 
 # ===== 示例节点（占位数据，请替换为你的真实订阅）=====
+# 把订阅里的 proxies 整段粘贴到这里
 proxies:
   - name: '示例节点-香港01'
     type: ss
@@ -48,13 +56,15 @@ proxies:
       headers:
         Host: example-jp-01.example.com
 
+# ===== 代理组（ClashManager 操作的对象，必须是 type: select）=====
 proxy-groups:
-  - name: '🚀节点选择'
+  - name: '🚀节点选择'          # 对应 CLASH_GROUP_NAME
     type: select
     proxies:
       - '示例节点-香港01'
       - '示例节点-日本01'
 
+# ===== 分流规则（关键: 最终出口必须指向上面管理的 select 组）=====
 rules:
   - GEOIP,CN,DIRECT
   - MATCH,🚀节点选择

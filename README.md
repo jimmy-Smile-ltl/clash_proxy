@@ -223,8 +223,20 @@ clash_proxy/
 ├── scripts/
 │   └── sync_config.sh        # 从订阅文件同步配置
 └── docs/
-    └── quickstart.md         # 从零到一教程
+    ├── quickstart.md         # 从零到一教程
+    ├── config-guide.md       # Clash 配置文件讲解（字段/导入方式/常见坑）
+    ├── logic.md              # ClashManager 逻辑介绍（切换状态机/黑名单/线程安全）
+    └── http-clients.md       # 搭配 requests / curl_cffi / aiohttp 用法大全
 ```
+
+## 文档导航
+
+| 文档 | 内容 |
+|------|------|
+| [docs/quickstart.md](docs/quickstart.md) | 从零到一：部署 → 订阅 → 第一个采集脚本 |
+| [docs/config-guide.md](docs/config-guide.md) | Clash 配置文件逐字段讲解、订阅导入三种方式、常见坑 |
+| [docs/logic.md](docs/logic.md) | ClashManager 内部逻辑：切换状态机、双重验证、黑名单机制 |
+| [docs/http-clients.md](docs/http-clients.md) | 代理池搭配 requests / curl_cffi / aiohttp 的完整写法 |
 
 ---
 

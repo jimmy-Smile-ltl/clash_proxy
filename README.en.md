@@ -201,8 +201,20 @@ clash_proxy/
 ├── scripts/
 │   └── sync_config.sh        # sync config from a subscription file
 └── docs/
-    └── quickstart.md         # zero-to-one tutorial
+    ├── quickstart.md         # zero-to-one tutorial
+    ├── config-guide.md       # Clash config explained (fields / import / pitfalls)
+    ├── logic.md              # internals: switch state machine, blacklist, threading
+    └── http-clients.md       # usage with requests / curl_cffi / aiohttp
 ```
+
+## Documentation
+
+| Doc | Covers |
+|-----|--------|
+| [docs/quickstart.md](docs/quickstart.md) | Zero to one: deploy → subscription → first scraper |
+| [docs/config-guide.md](docs/config-guide.md) | Clash config field-by-field, three import methods, pitfalls |
+| [docs/logic.md](docs/logic.md) | Internals: switch state machine, dual verification, blacklist |
+| [docs/http-clients.md](docs/http-clients.md) | Full usage with requests / curl_cffi / aiohttp |
 
 ---
 
