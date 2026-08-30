@@ -1,0 +1,60 @@
+# Clash 配置示例模板
+# 复制为 config/config.yaml 并替换为你的订阅内容（勿将真实订阅提交到仓库）
+#
+# 说明:
+#  - 节点来源可以是任何机场订阅 / 自建节点，经 mihomo 转换后粘贴到 proxies 段
+#  - secret 必须与 .env 中的 CLASH_SECRET 一致
+#  - geoip.metadb / GeoSite.dat 请按 config/README.md 下载
+
+mixed-port: 7890
+allow-lan: false
+bind-address: '*'
+mode: rule
+log-level: info
+external-controller: '127.0.0.1:9090'
+secret: "your-secret-here"
+unified-delay: true
+tcp-concurrent: true
+ipv6: false
+
+dns:
+  enable: true
+  ipv6: false
+  enhanced-mode: fake-ip
+  fake-ip-range: 198.18.0.1/16
+  use-hosts: true
+  default-nameserver: [223.5.5.5, 119.29.29.29]
+  nameserver: [223.5.5.5, 119.29.29.29]
+
+# ===== 示例节点（占位数据，请替换为你的真实订阅）=====
+proxies:
+  - name: '示例节点-香港01'
+    type: ss
+    server: example-hk-01.example.com
+    port: 443
+    cipher: aes-256-gcm
+    password: 'replace-me'
+  - name: '示例节点-日本01'
+    type: vless
+    server: example-jp-01.example.com
+    port: 443
+    uuid: '00000000-0000-0000-0000-000000000000'
+    udp: true
+    tls: true
+    servername: example-jp-01.example.com
+    network: ws
+    ws-opts:
+      path: /replace-me
+      headers:
+        Host: example-jp-01.example.com
+
+proxy-groups:
+  - name: '🚀节点选择'
+    type: select
+    proxies:
+      - '示例节点-香港01'
+      - '示例节点-日本01'
+
+rules:
+  - GEOIP,CN,DIRECT
+  - MATCH,🚀节点选择

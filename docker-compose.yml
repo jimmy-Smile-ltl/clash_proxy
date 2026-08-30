@@ -1,0 +1,17 @@
+services:
+  clash:
+    image: metacubex/mihomo:latest
+    container_name: clash_proxy
+    restart: always
+    volumes:
+      - "./config:/root/.config/mihomo"
+    ports:
+      - "127.0.0.1:9099:9090"   # API: 仅本地访问，主机 9099 -> 容器 9090
+      - "127.0.0.1:7777:7890"   # 代理: 仅本地访问，主机 7777 -> 容器 7890
+    environment:
+      - TZ=Asia/Shanghai
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
