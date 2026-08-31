@@ -1,37 +1,94 @@
-# Clash Proxy — Airport Node Proxy Pool Manager
+# Clash Proxy
 
 <p align="center">
   <img src="https://img.shields.io/badge/Python-3.8+-blue.svg" alt="Python">
   <img src="https://img.shields.io/badge/License-MIT-green.svg" alt="License">
   <img src="https://img.shields.io/badge/Clash-Mihomo-orange.svg" alt="Mihomo">
-  <img src="https://img.shields.io/badge/Use%20Case-light--weight%20scraping-blueviolet.svg" alt="Use Case">
+  <img src="https://img.shields.io/badge/Single%20File-No%20Framework-brightgreen.svg" alt="Single File">
 </p>
 
-> Turn the "unused nodes" in your airport subscription into a scraping proxy pool: node discovery, latency testing, health checks, load balancing, and automatic failover — in a single file.
+<p align="center">
+  <b>Your airport subscription has 30 nodes. Your scraper uses 1.</b><br>
+  The other 29 are idle — and your scraper is starving for proxies.
+</p>
+
+**clash_proxy turns those idle nodes into a scraping proxy pool**: auto health checks, auto rotation, auto failover on bans, self-healing overnight.
+
+> One file · Three lines to integrate · Zero cost beyond your subscription
 
 **中文文档：[README.md](README.md)**
 
 ---
 
-## Why this exists (Use Case)
+## What problem does it solve
 
-Overseas scraping has an annoying proxy cost problem:
+Scraping overseas sites means three proxy headaches:
 
-- **Commercial proxy pools** (residential/DC IPs) are billed by traffic — thousands of dollars a month, total overkill for light data collection;
-- **Airport subscriptions** give you a dozen or dozens of nodes for a few dollars a month — and people typically use only one or two of them. The other 90% sit idle.
+| 😩 Pain | 💸 Usual answer | ✅ With clash_proxy |
+|---------|-----------------|---------------------|
+| **Proxies are expensive** — commercial pools bill by traffic; hundreds a month for a few thousand pages | Buy a plan, waste 90% of it | Reuse the **airport nodes you already pay for** — zero extra cost |
+| **Bans stall your job** — site blocks your IP, you either babysit the client or let the task die overnight | Manual switching / spaghetti scripts | 3 consecutive 403s → **auto-switch**, job keeps running |
+| **Node quality is a mystery** — which of those 30 nodes works? Which is fast? Which is already banned? | Test them one by one, by hand | Full latency sweep + pre-switch check + real post-switch verification — **only rotate through nodes that provably work** |
 
-**This project fixes exactly that**: when your task only needs a small amount of data (academic papers, public datasets, foreign news, API data…), a handful of airport nodes is more than enough. Clash Proxy manages those nodes for you:
+**TL;DR**: your airport subscription hides a mini proxy pool. This project turns it on.
 
-| Capability | Description |
-|------------|-------------|
-| 🔌 Node discovery | Pull all nodes from a Clash proxy group; auto-filter subscription metadata ("expiry", "remaining traffic"), nested groups, unsupported types |
-| 📶 Node testing | Clash API latency test **plus** real-world connectivity check through the proxy egress — dual verification |
-| 🔄 Node rotation | Auto-switch triggered by download count or 403 count; four load-balancing strategies |
-| ⚖️ Load balancing | `round_robin` / `random` / `least_403` / `least_used` |
-| 🛡️ Node management | Verified-node pool, per-site error blacklist, over-kill protection, background health daemon |
-| 💾 Persistence | Local JSON state + optional Redis for cross-process blacklist sharing |
+---
 
-> ⚠️ **Scope**: this is NOT a proxy service (it provides no IPs) and does no concurrent dialing. It manages the *limited nodes* in your subscription — built for "small data + limited nodes". For hundreds of requests per second, use a commercial proxy pool.
+## What it does, in 60 seconds
+
+| Capability | In one sentence |
+|------------|-----------------|
+| 🔌 **Read** nodes | Pull real nodes from your subscription, filtering "remaining traffic" / "expiry" junk entries |
+| 📶 **Test** nodes | Full latency sweep + a real request through the proxy to your target site |
+| 🔄 **Rotate** nodes | Auto-switch after 3× 403 / every N downloads / background daemon self-healing |
+| ⚖️ **Balance** load | 4 strategies: round-robin, random, fewest-403s-first, least-used-first |
+| 📊 **See** everything | `stats` shows per-node download counts and 403 history |
+
+## Three lines to integrate
+
+```python
+from clash_manager import ClashManager
+
+manager = ClashManager({
+    "api_url": "http://127.0.0.1:9099",
+    "secret": "your-secret",
+    "post_switch_test_url": "https://your-target-site/",  # your actual target
+})
+
+proxies = manager.get_proxy_config()   # route all scraper traffic through this
+```
+
+Two report calls in your request loop, everything else is automatic:
+
+```python
+resp = requests.get(url, proxies=proxies, timeout=30)
+
+if resp.status_code == 403:
+    manager.increment_403_error()        # banned? 3 strikes → auto-switch
+elif resp.status_code == 200:
+    manager.increment_download_count()   # success — load-balancing bookkeeping
+```
+
+Full recipes for requests, curl_cffi and aiohttp: [docs/http-clients.md](docs/http-clients.md).
+
+---
+
+## Why not a commercial proxy pool?
+
+| | 💰 Commercial pool | ✈️ Airport nodes + clash_proxy |
+|--|--------------------|-------------------------------|
+| Monthly cost | $50 ~ $500+ | **$0** (beyond your subscription) |
+| Scale | Hundreds of req/s | **Light-weight scraping** (papers, public data, news, APIs) |
+| Integration | Learn vendor SDKs, watch the meter | One file, three lines |
+| Node ownership | Assigned by vendor, out of your control | Your subscription, add nodes anytime |
+
+**Honest disclaimer**: airport nodes have limited bandwidth — this is not for
+hundreds-of-requests-per-second workloads. But for tens of thousands of papers
+or public records, a commercial pool is overkill, and your idle nodes fit
+perfectly.
+
+> Battle-tested in a real overseas academic-paper collection project:
+> hundreds of automatic switches, dozens of fully-managed nodes, unattended runs.
 
 ---
 
@@ -102,41 +159,6 @@ python clash_cli.py test
 
 ---
 
-## Scraper Integration
-
-```python
-from clash_manager import ClashManager
-
-manager = ClashManager({
-    "api_url": "http://127.0.0.1:9099",
-    "secret": "your-secret",
-    "group_name": "🚀节点选择",               # the proxy group your nodes live in
-    "proxy_port": 7777,                        # local proxy port
-    "post_switch_test_url": "https://target-site/",  # IMPORTANT: use your real target
-    "switch_strategy": "least_403",
-    "max_downloads_per_node": 500,
-})
-
-# route all requests through the local proxy
-proxies = manager.get_proxy_config()
-
-for url in url_list:
-    resp = requests.get(url, proxies=proxies, timeout=30)
-
-    if resp.status_code == 403:
-        manager.increment_403_error()      # 3 strikes → auto switch node
-    elif resp.status_code == 200:
-        manager.increment_download_count() # rotate after 500 downloads (load balance)
-        save(resp.content)
-
-# optional: background daemon — auto-switch if the node dies mid-run
-manager.start_auto_health_check(interval_sec=30)
-```
-
-All methods are thread-safe (switches are serialized internally).
-
----
-
 ## CLI
 
 ```bash
@@ -196,7 +218,7 @@ clash_proxy/
 ├── docker-compose.yml        # Mihomo Docker deployment
 ├── .env.example              # environment variable template
 ├── config/
-│   ├── config.example.yaml   # sanitized Clash config template
+│   ├── config.example.yaml   # sanitized Clash config template (with comments)
 │   └── README.md             # config & geo database notes
 ├── scripts/
 │   └── sync_config.sh        # sync config from a subscription file

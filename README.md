@@ -1,60 +1,97 @@
-# Clash Proxy — 机场节点代理池管理器
+# Clash Proxy
 
 <p align="center">
   <img src="https://img.shields.io/badge/Python-3.8+-blue.svg" alt="Python">
   <img src="https://img.shields.io/badge/License-MIT-green.svg" alt="License">
   <img src="https://img.shields.io/badge/Clash-Mihomo-orange.svg" alt="Mihomo">
-  <img src="https://img.shields.io/badge/场景-少量数据采集-blueviolet.svg" alt="场景">
+  <img src="https://img.shields.io/badge/单文件-无框架依赖-brightgreen.svg" alt="Single File">
 </p>
 
-> 把机场订阅里「用不完的节点」变成爬虫的代理池：节点读取、测速、健康检测、负载均衡、失败自动切换，一个文件全搞定。
+<p align="center">
+  <b>你的机场订阅里有 30 个节点，爬虫只用了 1 个。</b><br>
+  剩下 29 个在吃灰 —— 而你的爬虫，正缺代理。
+</p>
+
+**clash_proxy 把吃灰的节点管成爬虫代理池**：自动测速、自动轮换、被封自动切换、半夜挂掉自愈。
+
+> 一个文件 · 三行代码接入 · 机场订阅费之外零成本
 
 **English: [README.en.md](README.en.md)**
 
 ---
 
-## 为什么需要它？（使用场景）
+## 它解决什么问题
 
-做海外数据采集时，代理是最让人头疼的成本之一：
+做海外采集，代理是三座绕不开的大山。爬虫人的真实日常：
 
-- **企业级海外代理**（住宅 IP / 机房代理池）：按流量计费，动辄几千元/月，采集少量数据纯属浪费；
-- **机场订阅**：几十块钱/月就有十几到几十个节点，但多数人只用其中一两个——剩下 90% 的节点在闲置。
+| 😩 你的痛点 | 💸 目前的解法 | ✅ 有了 clash_proxy |
+|-------------|---------------|---------------------|
+| **代理太贵** — 采几千条数据，商业海外代理却按大规模流量计费，一个月几百上千块 | 咬着牙买流量包，90% 用不完 | 用你**已有的机场节点**，订阅费之外零成本 |
+| **封 IP 就断活** — 目标站一封，要么手动去客户端点切换，要么任务挂到天亮 | 人肉盯着 / 写一坨切换脚本 | 连续 3 次 403 **自动切节点**，任务继续跑 |
+| **节点好坏全靠蒙** — 机场几十个节点，哪个能用？哪个快？哪个已经被封？ | 挨个手动测，换一个试一个 | 全量测速 + 切换前预检 + 切换后真实验证，**只轮换确认能用的** |
 
-**本项目解决的就是这个问题**：当你的采集任务只需要少量数据（学术文献、公开数据、国外新闻、API 数据等），用机场的少量节点就完全够用。Clash Proxy 帮你把这些节点管起来：
+**一句话总结**：你买的机场订阅里，藏着一个小型代理池。本项目负责把它开起来。
 
-| 能力 | 说明 |
-|------|------|
-| 🔌 节点读取 | 从 Clash 策略组拉取全部节点，自动过滤订阅元数据（"剩余流量""到期"等）、嵌套策略组、不支持的类型 |
-| 📶 节点测试 | Clash API 延迟测试 + 经代理出口真实访问目标站，**双重验证** |
-| 🔄 节点轮换 | 下载计数 / 403 计数触发自动切换，四种负载均衡策略 |
-| ⚖️ 负载均衡 | `round_robin`（轮询）/ `random`（随机）/ `least_403`（403 最少的优先）/ `least_used`（使用最少的优先） |
-| 🛡️ 节点管理 | 已验证节点池、错误节点黑名单（**按站点隔离**）、误杀保护、健康守护线程 |
-| 💾 状态持久化 | 本地 JSON 状态 + 可选 Redis 跨进程共享黑名单 |
+---
 
-> ⚠️ **边界**：本项目不是代理池服务（不提供 IP），也不做并发拨号。它管理的是**机场订阅里的有限节点**，适合「少量数据 + 有限节点」的场景；如果需要每秒上百请求的大规模采集，请使用商业代理池。
+## 一分钟看懂它能干什么
+
+| 能力 | 一句话说明 |
+|------|-----------|
+| 🔌 **读**节点 | 自动从订阅里挑出真实节点，过滤「剩余流量」「到期时间」等垃圾条目 |
+| 📶 **测**节点 | 全量延迟测试 + 经代理真实访问你的目标站，双重确认 |
+| 🔄 **换**节点 | 3 次 403 自动切 / 每下载 N 次轮换 / 后台守护自愈 |
+| ⚖️ **均衡**负载 | 4 种策略：轮流用、随机、谁 403 少用谁、谁用得少用谁 |
+| 📊 **看**得见 | `stats` 命令直接看每个节点的下载次数和 403 历史 |
+
+## 三行代码接入爬虫
+
+```python
+from clash_manager import ClashManager
+
+manager = ClashManager({
+    "api_url": "http://127.0.0.1:9099",        # Clash API 地址
+    "secret": "your-secret",
+    "post_switch_test_url": "https://你的目标站/",  # 就填你要采集的站
+})
+
+proxies = manager.get_proxy_config()   # 爬虫所有请求走这个
+```
+
+请求处只需两个上报，其余全自动：
+
+```python
+resp = requests.get(url, proxies=proxies, timeout=30)
+
+if resp.status_code == 403:
+    manager.increment_403_error()        # 被封了？攒满 3 次自动换节点
+elif resp.status_code == 200:
+    manager.increment_download_count()   # 下载成功，负载均衡自动记账
+```
+
+requests、curl_cffi、aiohttp 的完整写法见 [docs/http-clients.md](docs/http-clients.md)。
+
+---
+
+## 为什么不用商业代理池？
+
+| | 💰 商业海外代理池 | ✈️ 机场节点 + clash_proxy |
+|--|------------------|--------------------------|
+| 月成本 | 几百 ~ 上千元 | **0**（订阅费之外） |
+| 适用量级 | 每秒上百请求的大规模采集 | **少量数据采集**（学术文献、公开数据、新闻、API） |
+| 接入成本 | 学习各家 SDK、按流量对账 | 一个文件，三行代码 |
+| 节点来源 | 服务商分配，不可控 | 你自己的订阅，随时加节点 |
+
+**诚实声明**：机场节点带宽有限，本项目不适用于每秒上百请求的重型采集。
+但如果你要采的是几万条文献、几万条公开数据——商业代理池是杀鸡用牛刀，
+吃灰的机场节点刚刚好。
+
+> 本项目已在真实海外文献采集项目中长期运行：数百次自动切换、数十个节点
+> 全托管、任务全程无人值守。
 
 ---
 
 ## 架构
-
-```
-┌───────────────── 爬虫进程 ─────────────────┐
-│  Spider                                       │
-│    │ ① 经本地代理请求目标站                    │
-│    │ ② 403/成功 → 通知 ClashManager           │
-│    ▼                                          │
-│  ClashManager ──── RESTful API 直连 ────┐    │
-│    │ ③ 读取/测速/切换节点               │    │
-│    │ ④ 双重验证(延迟+真实出口)           │    │
-│    ▼                                    ▼    │
-│  clash_node_state.json         Mihomo(Clash) │
-│  (本地状态/验证池)               │ 代理端口    │
-│  Redis(可选,跨进程黑名单)         ▼            │
-└────────────────────────────── 机场节点池 ────┘
-                                       │
-                                       ▼
-                                  目标网站
-```
 
 ```mermaid
 flowchart TB
@@ -122,43 +159,6 @@ python clash_cli.py test
 
 ---
 
-## 爬虫集成（核心用法）
-
-```python
-from clash_manager import ClashManager
-
-manager = ClashManager({
-    "api_url": "http://127.0.0.1:9099",
-    "secret": "your-secret",
-    "group_name": "🚀节点选择",            # 订阅里节点所在的策略组
-    "proxy_port": 7777,                     # 本地代理端口
-    "post_switch_test_url": "https://目标网站/",  # 重要: 填你实际要采集的站
-    "switch_strategy": "least_403",         # 负载均衡策略
-    "max_downloads_per_node": 500,          # 每个节点最多下载 500 次
-})
-
-# 所有请求都走本地代理
-proxies = manager.get_proxy_config()  # {"http": "http://127.0.0.1:7777", ...}
-
-for url in url_list:
-    resp = requests.get(url, proxies=proxies, timeout=30)
-
-    if resp.status_code == 403:
-        # 被目标站封了: 累计 3 次自动切换节点
-        manager.increment_403_error()
-    elif resp.status_code == 200:
-        # 下载成功: 计数, 每节点满 500 次轮换(负载均衡)
-        manager.increment_download_count()
-        save(resp.content)
-
-# 可选: 启动后台守护, 节点中途挂掉自动切换
-manager.start_auto_health_check(interval_sec=30)
-```
-
-多线程场景下所有方法都是线程安全的（切换操作内部加锁排队）。
-
----
-
 ## CLI 使用
 
 ```bash
@@ -218,7 +218,7 @@ clash_proxy/
 ├── docker-compose.yml        # Mihomo Docker 部署
 ├── .env.example              # 环境变量模板
 ├── config/
-│   ├── config.example.yaml   # Clash 配置示例(脱敏)
+│   ├── config.example.yaml   # Clash 配置示例(脱敏, 带讲解注释)
 │   └── README.md             # 配置文件/地理数据库说明
 ├── scripts/
 │   └── sync_config.sh        # 从订阅文件同步配置
