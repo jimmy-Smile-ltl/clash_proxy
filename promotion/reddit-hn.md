@@ -33,12 +33,12 @@ manager = ClashManager({
 proxies = manager.get_proxy_config()
 resp = requests.get(url, proxies=proxies)
 if resp.status_code == 403:
-    manager.increment_403_error()   # auto-switches after 3
+    manager.report_verdict("blocked")  # rejected (403 / business code) → auto-switch
 ```
 
 Honest scope note: this is built for **light-weight scraping** (academic papers, public datasets, news) with a limited node pool — not hundreds of req/s; for that you still want a commercial pool.
 
-Stack: one ~700-line Python file + a CLI + a Dockerized Mihomo. No framework dependencies, works with any Clash client (Clash Verge, mihomo, routers). MIT licensed. Stars, issues and PRs welcome.
+Stack: one ~1300-line Python file + a CLI + a Dockerized Mihomo. No framework dependencies, works with any Clash client (Clash Verge, mihomo, routers). MIT licensed. Stars, issues and PRs welcome.
 
 ---
 

@@ -199,8 +199,14 @@ CLASH_CONFIG_SOURCE=/path/to/订阅.yaml ./scripts/sync_config.sh your-secret
 | 现象 | 原因 | 解决 |
 |------|------|------|
 | API 返回 401 | secret 与 `.env` 不一致 | 两边统一；`clash_cli.py test` 验证 |
-| `切换成功但出口没变` | 规则把流量导向了 url-test/fallback 组 | 让 `MATCH` 规则指向你管理的 select 组 |
+| `切换成功但出口没变` | **① Clash 处于 rule 模式**，流量按规则链走，切策略组是 no-op | 切到 global 模式（`mode: global`），或设 `force_global_mode: true` 让库里自动切 |
+| 同上 | **② 规则把流量导向了 url-test/fallback 组** | 让 `MATCH` 规则指向你管理的 select 组 |
+| 同上 | **③ keep-alive 复用旧连接** | 切换后重新建连（新 Session / `Connection: close` / 页面 reload） |
 | 节点列表为空 | 订阅粘贴不完整 / 节点类型全被过滤 | `clash_cli.py list` 看输出；确认 proxies 段存在 |
 | 组名自动变了 | group_name 填错被自动发现替换 | 正常行为；用 `clash_cli.py status` 看实际组名 |
 | Docker 里 API 连不上 | external-controller 还是 127.0.0.1 | 容器内必须 `0.0.0.0:9090`（sync_config.sh 已处理） |
 | 测延迟全失败 | 订阅节点挂了 / DNS 没配 | 先 curl 直连节点服务器试试；检查 dns 段 |
+
+> 上面三条「切换成功但出口没变」的共同点是**都很静默**：`PUT` 返回 204、
+> 策略组的 `now` 也确实变了、目标站也访问得通 —— 因为目标站本来就能访问，
+> 只是走的还是老出口。`verify_exit_ip`（默认开）会用实测出口 IP 把它们揪出来。

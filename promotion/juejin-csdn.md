@@ -44,7 +44,7 @@ flowchart LR
 
 ### 1. 只信 API 的 204 会被坑
 
-`PUT /proxies/{group}` 返回 204 只代表"请求被接受"，不代表节点真能上网——节点可能欠费、被封、线路故障。所以切换必须**双重验证**：
+`PUT /proxies/{group}` 返回 204 只代表"请求被接受"，既不保证节点真能上网，也不保证**流量真的换了出口**。所以切换必须**三重验证**（① 切前测延迟 ② 切后真实访问目标站 ③ 比对实测出口 IP）：
 
 1. API 确认策略组 `now` 已指向目标节点；
 2. 经本地代理出口真实请求一次目标站，200/204 才算成功。
@@ -108,9 +108,9 @@ proxies = manager.get_proxy_config()
 for url in urls:
     resp = requests.get(url, proxies=proxies, timeout=30)
     if resp.status_code == 403:
-        manager.increment_403_error()        # 3 次 403 自动切
+        manager.report_verdict("blocked")     # 被拒 → 攒够次数自动切
     elif resp.status_code == 200:
-        manager.increment_download_count()   # 500 次轮换
+        manager.report_verdict("ok")          # 成功 → 记账 + 修复该节点信誉
 ```
 
 加上 Docker 部署的 Mihomo，`docker compose up -d` 即可在服务器跑起来。详细的从零到一教程在仓库 `docs/quickstart.md`。
@@ -124,7 +124,7 @@ for url in urls:
 
 ## 七、总结
 
-代理池的"池"字，不一定要买才配拥有。把订阅里闲置的节点管起来，节点读取、测速、轮换、负载均衡、失败切换，一个单文件搞定。项目已开源：
+代理池的"池"字，不一定要买才配拥有。把订阅里闲置的节点管起来，节点读取、测速、轮换、负载均衡、失败切换，核心一个单文件搞定（另有可选扩展模块）。项目已开源：
 
 **GitHub: https://github.com/jimmy-Smile-ltl/clash_proxy**
 

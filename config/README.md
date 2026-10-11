@@ -25,7 +25,7 @@ mv config/geosite.dat config/GeoSite.dat
 
 ```bash
 docker compose up -d
-python scripts/clash-cli.py test
+python clash_cli.py test
 ```
 
 看到 `[✅] Clash API 可达` 即配置成功。

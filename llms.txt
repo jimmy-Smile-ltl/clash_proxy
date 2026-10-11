@@ -1,0 +1,44 @@
+# clash_proxy
+
+> 把机场（Clash / Mihomo）订阅里闲置的节点管成爬虫代理池：自动测速、自动轮换、被封自动切换、失效自动冷却恢复。零外部框架依赖，核心是单文件 Python 库。解决的是「做海外采集时商业代理太贵、单个机场节点被封就没法继续跑」的问题。
+
+clash_proxy 让你已经付费的机场订阅发挥第二份价值：订阅里的几十个节点，平时看视频用不完，正好拿来当采集出口池。它通过 Clash/Mihomo 的 RESTful API 读节点、测延迟、切出口，并围绕「切换是否真的生效」做三层验证。
+
+## 核心概念
+
+- **代理出口（exit / node）**：一个具体的线路，比如 `🇸🇬 Hy2|新加坡|原生|ISIF`
+- **三重验证**：① 切换前测候选延迟 ② 切换后经代理真实访问目标站 ③ 比对**实测出口 IP** —— 前两步都过、出口却没变的情况真实存在（rule 模式 / keep-alive 复用旧连接），只有实测 IP 能识破
+- **三态上报**：`report_verdict("ok" / "blocked" / "dead")`。判据由调用方按目标站定义 —— 同一个 HTTP 403，对 A 站是权限不足、对 B 站才是 IP 被封
+- **指数冷却**：节点失败后冷却 `120s × 2ⁿ`（封顶 2 小时）再自动回到轮换池；不永久拉黑会自愈的节点
+- **全池熔断**：所有出口都失效时静默等待（默认 1 小时），因为服务端整体限流是由**聚合请求速率**维持的，继续试探只会延长它
+
+## 快速开始
+
+- [README.md](README.md): 项目介绍、为什么不用商业代理池、架构图、快速开始（本地 Clash 客户端 / Docker 两种方式）、完整配置项表、FAQ
+- [docs/quickstart.md](docs/quickstart.md): 从零到一 —— 部署 → 订阅 → 第一个采集脚本
+- [docs/config-guide.md](docs/config-guide.md): Clash 配置文件逐字段讲解、订阅导入三种方式、常见坑
+
+## 集成到你的采集代码
+
+- [clash_clients.py](clash_clients.py): **推荐入口**。一行拿到跟着代理池走的 requests / aiohttp / curl_cffi / Playwright 会话，自动带代理、切换后自动重建连接、自动上报判定
+- [docs/http-clients.md](docs/http-clients.md): requests / curl_cffi / aiohttp 的完整写法与选型建议
+- [docs/browser-clients.md](docs/browser-clients.md): Playwright / Selenium 用法，含反检测清单与实战踩坑
+
+## 扩展能力
+
+- [clash_sources.py](clash_sources.py): 可插拔代理来源 —— Clash 策略组 / 静态代理列表（不经 Clash）/ 多 Clash 实例聚合
+- [clash_policy.py](clash_policy.py): 节点优先度 —— 置顶、拉黑、地区偏好与排除、延迟阈值、流量倍率
+- [clash_probe.py](clash_probe.py): 目标站探针（按业务码判定被封）、逐节点出口 IP、网络体检 `netcheck`
+
+## 内部机制与排查
+
+- [docs/logic.md](docs/logic.md): 切换状态机、三重验证、冷却、线程安全设计
+- [clash_manager.py](clash_manager.py): 核心库，正式 API 与「为什么这样设计」的说明都在 docstring 里
+- [clash_cli.py](clash_cli.py): 命令行 —— `list` / `switch` / `status` / `stats` / `health` / `test` / `monitor` / `netcheck` / `priority`
+- [AGENTS.md](AGENTS.md): 给 AI 编码 agent 的项目约定与改动指引
+
+## 验证与测试
+
+- [tests/sources_test.py](tests/sources_test.py): 离线单测，不联网、不需要 Clash，覆盖来源解析 / 优先度 / 站点判据 / 客户端适配
+- [tests/smoke_test.py](tests/smoke_test.py): 冒烟自检，只读、不切节点，采集跑着也能安全执行
+- [tests/switch_live_test.py](tests/switch_live_test.py): 真实切换验证，需要第二个 Clash 实例

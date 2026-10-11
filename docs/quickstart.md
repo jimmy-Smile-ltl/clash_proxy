@@ -100,15 +100,15 @@ for i, url in enumerate(url_list):
     try:
         resp = requests.get(url, proxies=proxies, timeout=30)
     except requests.RequestException:
-        # 节点挂了：主动触发切换
-        manager.switch_to_healthy_node(record_now=True)
+        # 链路不通：该节点进入冷却（会自动排除出轮换），累计达阈值则切换
+        manager.report_verdict("dead")
         continue
 
     if resp.status_code == 403:
-        manager.increment_403_error()   # 累计 3 次 403 自动切节点
+        manager.report_verdict("blocked")   # 累计 3 次 403 自动切节点
         continue
     elif resp.status_code == 200:
-        manager.increment_download_count()  # 成功计数，满 100 次轮换
+        manager.report_verdict("ok")  # 成功计数，满 100 次轮换
         with open(f"data/{i}.html", "wb") as f:
             f.write(resp.content)
 ```

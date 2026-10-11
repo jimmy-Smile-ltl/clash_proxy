@@ -6,13 +6,55 @@ ClashManager 只负责「把当前节点定下来」，请求怎么发由你选�
 **通用原则**：
 
 1. 所有请求都带 `manager.get_proxy_config()` 提供的代理；
-2. 三个上报点必须写全（403 → 成功 → 节点故障），否则轮换逻辑不生效：
+2. 三个上报点必须写全（成功 → 被拒 → 链路不通），否则轮换逻辑不生效：
 
 | 情况 | 调用 |
 |------|------|
-| 目标站返回 403 | `manager.increment_403_error()`（累计 3 次自动切换） |
-| 请求成功 | `manager.increment_download_count()`（负载均衡计数） |
-| 连接失败/502/超时（节点故障而非被封） | `manager.switch_to_healthy_node(record_now=True)` |
+| 请求成功 | `manager.report_verdict("ok")` |
+| 目标站返回 403 / 429 / 业务风控码 | `manager.report_verdict("blocked")`（累计 3 次自动切换） |
+| 超时、连接被重置、DNS 失败 | `manager.report_verdict("dead")` |
+
+> 老接口 `increment_403_error()` / `increment_download_count()` 仍可用，
+> 前者等价于 `report_verdict("blocked")`。新代码建议统一用 `report_verdict`。
+
+3. **切换节点后，复用的连接仍走旧出口** —— 见文末〈⚠️ 最大的坑：keep-alive〉。
+
+---
+
+## 0. 先看这个：⚠️ 最大的坑 —— keep-alive 复用旧隧道
+
+**Clash/mihomo 是按「连接」选出口的**。切换节点只影响**之后新建**的连接；
+已经建立的 TCP/TLS 连接会继续用旧节点，直到被关闭或超时。
+
+这会造成一个很隐蔽的现象：**你以为换节点了，其实后面所有请求还在用原来那个出口。**
+
+```python
+session = requests.Session()          # 连接池
+resp = session.get(url, proxies=proxies)   # 建立连接 → 走节点 A
+
+manager.switch_to_healthy_node()      # 切到节点 B
+resp = session.get(url, proxies=proxies)   # ❌ 复用旧连接 → 实际还是节点 A！
+```
+
+三种正确做法（任选其一）：
+
+```python
+# ① 不复用 Session：每次都新建（最简单，代价是丢连接池）
+resp = requests.get(url, proxies=proxies, timeout=30)
+
+# ② 切换后丢弃连接池
+manager.switch_to_healthy_node()
+session.close()                        # 或 session = requests.Session() 重建
+
+# ③ 每个请求显式要求关闭连接（等价于禁用 keep-alive）
+resp = session.get(url, proxies=proxies, headers={"Connection": "close"})
+```
+
+浏览器场景同理（`page.reload()` / 新开页签），见 [browser-clients.md](browser-clients.md#41-切换节点后必须制造新连接--最大的坑)。
+
+**怎么确认真的换了出口？** 用 `manager.get_exit_ip()` —— 它就是为这件事准备的
+（经代理新建连接查一次出口 IP）。库内部在切换前后也会各查一次比对
+（`verify_exit_ip`，默认开），出口没变会直接报错而不是静默放过。
 
 ---
 
@@ -33,13 +75,13 @@ for url in url_list:
     try:
         resp = requests.get(url, proxies=proxies, timeout=30)
     except requests.RequestException:
-        manager.switch_to_healthy_node(record_now=True)  # 节点故障
+        manager.report_verdict("dead")               # 链路不通 → 节点冷却，换出口
         continue
 
     if resp.status_code == 403:
-        manager.increment_403_error()
+        manager.report_verdict("blocked")
     elif resp.status_code == 200:
-        manager.increment_download_count()
+        manager.report_verdict("ok")
         save(resp.content)
 ```
 
@@ -72,13 +114,13 @@ for url in url_list:
             timeout=30,
         )
     except Exception:
-        manager.switch_to_healthy_node(record_now=True)
+        manager.report_verdict("dead")
         continue
 
     if resp.status_code == 403:
-        manager.increment_403_error()
+        manager.report_verdict("blocked")
     elif resp.status_code == 200:
-        manager.increment_download_count()
+        manager.report_verdict("ok")
         save(resp.content)
 ```
 
@@ -113,13 +155,13 @@ async def fetch(session, url):
     try:
         async with session.get(url, timeout=aiohttp.ClientTimeout(total=30)) as resp:
             if resp.status == 403:
-                manager.increment_403_error()
+                manager.report_verdict("blocked")
                 return None
             if resp.status == 200:
-                manager.increment_download_count()
+                manager.report_verdict("ok")
                 return await resp.read()
     except (aiohttp.ClientError, asyncio.TimeoutError):
-        manager.switch_to_healthy_node(record_now=True)   # 节点故障
+        manager.report_verdict("dead")   # 节点故障
     return None
 
 async def main(url_list):
@@ -174,13 +216,13 @@ def fetch_one(url):
     try:
         resp = requests.get(url, proxies=proxies, timeout=30)
     except requests.RequestException:
-        manager.switch_to_healthy_node(record_now=True)
+        manager.report_verdict("dead")
         return None
     if resp.status_code == 403:
-        manager.increment_403_error()
+        manager.report_verdict("blocked")
         return None
     if resp.status_code == 200:
-        manager.increment_download_count()
+        manager.report_verdict("ok")
         return resp.content
     return None
 
@@ -192,7 +234,7 @@ with ThreadPoolExecutor(max_workers=8) as pool:
             save(data)
 ```
 
-**切换期间的请求**：某个线程触发切换（`increment_403_error` 攒满 3 次）
+**切换期间的请求**：某个线程触发切换（`report_verdict("blocked")` 攒满 3 次）
 时，其他线程的请求仍走旧节点直到 PUT 生效，期间可能继续 403——这是
 预期行为，重试即可。若想严格「切换完成后再发请求」：
 
