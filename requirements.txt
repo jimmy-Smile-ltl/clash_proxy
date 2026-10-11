@@ -1,0 +1,21 @@
+# clash_proxy 运行依赖
+#
+# 核心只需要 requests —— 其余都是可选的扩展模块依赖，按需安装。
+# 也可以直接 pip install .（见 pyproject.toml 的 optional-dependencies）
+
+# ── 核心（必装）────────────────────────────────────
+requests>=2.25
+
+# ── 可选：跨进程共享错误黑名单 ──────────────────────
+# redis>=4.0
+
+# ── 可选：异步采集（clash_clients.aiohttp_session）──
+# aiohttp>=3.8
+
+# ── 可选：TLS 指纹伪装（clash_clients.curl_cffi_session）
+#    目标站做 TLS 指纹检测、requests 被拒但浏览器能开时用它
+# curl-cffi>=0.5
+
+# ── 可选：真浏览器（clash_clients.browser_context）──
+# playwright>=1.30
+#   装完还要执行: playwright install chromium

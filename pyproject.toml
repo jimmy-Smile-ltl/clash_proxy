@@ -1,0 +1,84 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "clash-proxy"
+version = "2.0.0"
+description = "Turn your unused Clash/Mihomo airport nodes into a rotating proxy pool for web scraping — auto health-check, auto-rotate, auto-recover. 把机场订阅里吃灰的节点管成爬虫代理池。"
+readme = "README.md"
+requires-python = ">=3.8"
+license = { text = "MIT" }
+authors = [{ name = "Jimmy Smile", email = "jimmysmileltl@gmail.com" }]
+keywords = [
+    "proxy-pool",
+    "proxy-rotation",
+    "clash",
+    "mihomo",
+    "clash-verge",
+    "web-scraping",
+    "scraping",
+    "crawler",
+    "anti-ban",
+    "ip-rotation",
+    "proxy-manager",
+    "v2ray",
+    "shadowsocks",
+    "hysteria2",
+    "机场节点",
+    "爬虫",
+    "代理池",
+]
+classifiers = [
+    "Development Status :: 5 - Production/Stable",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.8",
+    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Internet :: Proxy Servers",
+    "Topic :: Internet :: WWW/HTTP",
+    "Topic :: Software Development :: Libraries :: Python Modules",
+]
+dependencies = ["requests>=2.25"]
+
+[project.optional-dependencies]
+redis = ["redis>=4.0"]
+aiohttp = ["aiohttp>=3.8"]
+curl-cffi = ["curl-cffi>=0.5"]
+browser = ["playwright>=1.30"]
+all = ["redis>=4.0", "aiohttp>=3.8", "curl-cffi>=0.5", "playwright>=1.30"]
+dev = ["ruff>=0.4"]
+
+[project.urls]
+Homepage = "https://github.com/jimmy-Smile-ltl/clash_proxy"
+Repository = "https://github.com/jimmy-Smile-ltl/clash_proxy"
+Issues = "https://github.com/jimmy-Smile-ltl/clash_proxy/issues"
+Documentation = "https://github.com/jimmy-Smile-ltl/clash_proxy/tree/main/docs"
+
+[project.scripts]
+clash-proxy = "clash_cli:main"
+
+[tool.setuptools]
+# 核心单文件 + 可选扩展模块（不装扩展也能跑，见 README）
+py-modules = [
+    "clash_manager",
+    "clash_cli",
+    "clash_sources",
+    "clash_policy",
+    "clash_probe",
+    "clash_clients",
+]
+
+[tool.ruff]
+line-length = 110
+target-version = "py38"
+
+[tool.ruff.lint]
+# 只开真正有用的规则集；本项目大量使用中文注释与 emoji 日志，不启用 E501 等行宽检查
+select = ["F", "E9", "W6"]
+ignore = ["E402"]

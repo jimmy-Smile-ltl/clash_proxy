@@ -31,3 +31,20 @@ logs/
 # IDE
 .idea/
 .vscode/
+
+# 节点优先度状态（运行时生成，含你的节点名）
+.clash_priority.json
+*.priority.json
+
+# 状态文件的锁与临时文件
+*.lock
+*.tmp
+
+# 打包产物
+dist/
+build/
+*.whl
+
+# 工具缓存
+.ruff_cache/
+.pytest_cache/
