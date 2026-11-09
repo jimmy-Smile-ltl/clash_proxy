@@ -318,6 +318,9 @@ class ClashManager:
         # 目标站若是重页面（带 JS 的首页等），5s 会误杀好节点 —— 实测有节点
         # 能正常取数却在 5s 的 delay 探测里超时。默认放宽到 10s。
         self.health_check_timeout_ms: int = config.get("health_check_timeout_ms", 10000)
+        # 启动时是否立即全量测延迟。节点很多（如合并订阅后 80+）时，每次
+        # 构造 ClashManager 都测一轮会很慢；可关掉，按需 health/切换前预检。
+        self.startup_health_check: bool = config.get("startup_health_check", True)
 
         # ---- 运行时状态 ----
         self.current_node_index: int = 0
@@ -346,7 +349,7 @@ class ClashManager:
         if self.force_global_mode:
             self.ensure_global_mode()
         if self.enable_node_switching:
-            if self.refresh_nodes():
+            if self.refresh_nodes() and self.startup_health_check:
                 self.refresh_node_health()
             # rule 模式下切策略组对流量是 no-op —— 提前把话说清楚，
             # 免得用户以为在轮换节点、实际一直用同一个出口。
@@ -647,7 +650,10 @@ class ClashManager:
                         "type": node_type,
                         "delay": 0,
                         "healthy": True,
-                        "last_check": time.time(),
+                        # 0 = 尚未检测。原先写 time.time() 会让紧接着的
+                        # refresh_node_health() 命中「5 分钟缓存」而一个节点都不测；
+                        # 显式检测请用 refresh_node_health(force=True)。
+                        "last_check": 0,
                     }
                     # 地区标记（优先度规则与 netcheck 都用到）
                     if self.policy is not None:
@@ -920,10 +926,10 @@ class ClashManager:
             pass
         return None
 
-    def _check_single_node_health(self, node: Dict) -> bool:
-        """检测单个节点健康状态（5分钟内复用缓存结果）。"""
+    def _check_single_node_health(self, node: Dict, force: bool = False) -> bool:
+        """检测单个节点健康状态（默认 5 分钟内复用缓存；force=True 强制重测）。"""
         try:
-            if node.get("last_check", 0) > time.time() - 300:  # 5分钟缓存
+            if not force and node.get("last_check", 0) > time.time() - 300:  # 5分钟缓存
                 return node.get("healthy", True)
 
             delay = self.get_node_delay(node["name"])
@@ -944,8 +950,8 @@ class ClashManager:
             node["last_check"] = time.time()
             return False
 
-    def _check_node_health(self) -> None:
-        """并发检测所有节点健康状态。"""
+    def _check_node_health(self, force: bool = False) -> None:
+        """并发检测所有节点健康状态（force=True 忽略 5 分钟缓存）。"""
         if not self.available_nodes:
             logger.warning("[⚠️] 没有可用节点进行健康检测")
             return
@@ -958,7 +964,8 @@ class ClashManager:
             logger.info("[📊] 健康检测并发度限制为 %s（共 %s 个节点）",
                         workers, len(self.available_nodes))
         with ThreadPoolExecutor(max_workers=workers) as executor:
-            futures = [executor.submit(self._check_single_node_health, node) for node in self.available_nodes]
+            futures = [executor.submit(self._check_single_node_health, node, force)
+                       for node in self.available_nodes]
             for future in as_completed(futures):
                 try:
                     future.result()
@@ -968,11 +975,14 @@ class ClashManager:
         healthy_count = sum(1 for n in self.available_nodes if n.get("healthy"))
         logger.info("[📊] 健康节点: %s/%s", healthy_count, len(self.available_nodes))
 
-    def refresh_node_health(self) -> bool:
-        """手动刷新全部节点健康状态。"""
-        logger.info("[🔄] 手动刷新节点健康状态...")
+    def refresh_node_health(self, force: bool = False) -> bool:
+        """手动刷新全部节点健康状态。
+
+        :param force: True = 忽略 5 分钟缓存，全部重测（CLI health / 订阅同步测试用）。
+        """
+        logger.info("[🔄] 手动刷新节点健康状态%s...", "（强制重测）" if force else "")
         try:
-            self._check_node_health()
+            self._check_node_health(force=force)
             logger.info("[✅] 节点健康状态刷新完成")
             return True
         except Exception as e:

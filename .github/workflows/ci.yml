@@ -26,19 +26,29 @@ jobs:
       - name: 安装依赖
         run: |
           python -m pip install --upgrade pip
-          pip install requests ruff
+          pip install requests pyyaml ruff
 
       - name: Lint (ruff)
         run: ruff check .
 
       - name: 编译检查（全部模块）
-        run: python -m compileall -q clash_manager.py clash_cli.py clash_sources.py clash_policy.py clash_probe.py clash_clients.py
+        run: python -m compileall -q clash_manager.py clash_cli.py clash_sources.py clash_policy.py clash_probe.py clash_clients.py clash_subscriptions.py scripts/check_privacy.py
 
       - name: 离线单测（不需要 Clash、不联网）
-        # tests/sources_test.py 覆盖来源解析 / 优先度 / 站点判据 / 客户端适配
+        # tests/sources_test.py 覆盖来源解析 / 优先度 / 站点判据 / 客户端适配 / 健康检测缓存
         run: python tests/sources_test.py
         env:
           PYTHONIOENCODING: utf-8
+
+      - name: 订阅合并单测（不需要 Clash、不联网）
+        # tests/subscriptions_test.py 覆盖格式解析 / 过滤 / 去重 / 合并 / 失败回退
+        run: python tests/subscriptions_test.py
+        env:
+          PYTHONIOENCODING: utf-8
+
+      - name: 隐私检查（禁止真实订阅 / 节点列表 / 密钥）
+        # 路径规则 + .gitignore 状态 + 内容特征；详见 docs/private-data.md
+        run: python scripts/check_privacy.py --all
 
       - name: 打包检查
         run: |

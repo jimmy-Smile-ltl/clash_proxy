@@ -7,7 +7,7 @@
 ```bash
 git clone https://github.com/jimmy-Smile-ltl/clash_proxy.git
 cd clash_proxy
-pip install requests ruff
+pip install requests pyyaml ruff
 ```
 
 本地没有 Clash 也能跑**离线单测**——这是最重要的一条，绝大多数改动都应该有对应的离线测试。
@@ -16,7 +16,8 @@ pip install requests ruff
 
 | 命令 | 需要什么 | 用途 |
 |---|---|---|
-| `python tests/sources_test.py` | 无（不联网、不需要 Clash） | **改完必跑**。覆盖来源解析、优先度规则、站点判据、客户端适配 |
+| `python tests/sources_test.py` | 无（不联网、不需要 Clash） | **改完必跑**。覆盖来源解析、优先度规则、站点判据、客户端适配、健康检测缓存 |
+| `python tests/subscriptions_test.py` | 无（不联网、不需要 Clash） | 订阅格式解析、过滤、去重、合并、失败回退 |
 | `python tests/smoke_test.py` | 一个可用的 Clash 实例 | 只读自检，不切节点，采集跑着也能安全执行 |
 | `python tests/switch_live_test.py` | **两个** Clash 实例 | 真实切换验证。会切节点，别打在正在采集的实例上 |
 
@@ -49,7 +50,9 @@ ruff check .
 
 1. **你遇到的现象**（能复现最好），而不只是「改了什么」；
 2. **为什么这么改** —— 如果推翻了某个现有设计，说明它原来解决什么问题、你的方案怎么覆盖；
-3. 跑过哪些测试。
+3. 跑过哪些测试；
+4. 确认没有提交真实订阅 / 节点列表 / 密钥 —— 提交前钩子会自动检查，
+   完整隔离方案见 [docs/private-data.md](docs/private-data.md)。
 
 如果改动涉及「切换节点」「验证出口」「冷却策略」这三块，请特别谨慎：
 它们都有过血泪教训，相关注释里写了原因，改之前请先读 `AGENTS.md` 末尾的

@@ -21,12 +21,31 @@ clash_sources.py   可选扩展：可插拔代理来源（Clash 策略组 / 静�
 clash_policy.py    可选扩展：节点优先度（置顶/拉黑/地区/延迟/倍率）
 clash_probe.py     可选扩展：目标站探针、逐节点出口 IP、网络体检
 clash_clients.py   可选扩展：requests / aiohttp / curl_cffi / Playwright 适配器
-tests/             三个测试脚本（见下）
+clash_subscriptions.py 可选扩展：多订阅拉取 / 校验 / 合并 / 定期刷新
+tests/             四个测试脚本（见下）
 ```
 
 **扩展模块都是可选的**：删掉它们，`clash_manager.py` + `clash_cli.py` 依然完整可用
 （主库用 `try: import ... except ImportError` 做优雅降级）。改动主库时**不要**引入
 对扩展模块的硬依赖。
+
+## 私有数据隔离（硬约束）
+
+本仓库是公开仓库，但运行需要真实订阅 / 节点列表 / 密钥。它们只能存在于：
+
+- `config/` 下除 `README.md`、`config.example.yaml` 之外的文件；
+- `local/`、`private/`、`secrets/` 目录（整个目录被忽略）；
+- `.env`、状态文件、出口 IP 日志等运行时文件。
+
+**不要**把这些内容写进代码、文档、测试或 `config.example.yaml`。
+`scripts/check_privacy.py` 会在提交前检查路径、ignore 状态与内容特征；
+新增可能含私有数据的文件名时，先补 `.gitignore` 再跑：
+
+```bash
+python scripts/check_privacy.py --all
+```
+
+完整方案见 [docs/private-data.md](docs/private-data.md)。
 
 ## 代码约定（请严格遵守）
 
@@ -57,6 +76,10 @@ tests/             三个测试脚本（见下）
 `_perform_switch()`（用 `_order_by_strategy`）和 `switch_to_healthy_node()`
 （独立的第二条路径，不经过任何策略）。只改一条会导致规则时灵时不灵。
 
+**加一种订阅格式 / 合并规则** → 改 `clash_subscriptions.py` 的 `parse_subscription()`
+或 `_valid_proxy()`。⚠️ 真实订阅内容只能出现在 `local/` 或 `.env`；
+新增日志必须先 `mask_source()`，不要把含 token 的 URL 打出来。
+
 **改状态持久化** → `save_state()` 对计数器用单调 `max()` 合并（多进程安全）。
 ⚠️ 但**标志位/权重不能用 max 合并**，否则跨进程永远取消不掉置顶。
 这类状态请放独立文件（参考 `NodePolicy.priority_file`）。
@@ -64,13 +87,14 @@ tests/             三个测试脚本（见下）
 ## 测试
 
 ```bash
-python tests/sources_test.py       # 离线单测，不联网、不需要 Clash —— 改完必跑
-python tests/smoke_test.py         # 冒烟自检，只读不切节点，采集跑着也能跑
-python tests/switch_live_test.py   # 真实切换（会切节点，用另一个 Clash 实例跑）
+python tests/sources_test.py        # 离线单测，不联网、不需要 Clash —— 改完必跑
+python tests/subscriptions_test.py  # 订阅解析/合并单测，不联网、不需要 Clash
+python tests/smoke_test.py          # 冒烟自检，只读不切节点，采集跑着也能跑
+python tests/switch_live_test.py    # 真实切换（会切节点，用另一个 Clash 实例跑）
 ```
 
-改任何扩展模块后，`sources_test.py` 必须全绿。它已经抓到过一次真实回归
-（过滤词用裸的 `"http"` 把静态来源的节点名整个误杀）。
+改任何扩展模块后，两个离线单测必须全绿。它们已经抓到过真实回归
+（过滤词用裸的 `"http"` 把静态来源的节点名整个误杀；健康检测被 5 分钟缓存跳过）。
 
 ## 这个项目最贵的几条经验（改代码前请先读）
 

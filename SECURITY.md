@@ -10,14 +10,26 @@
 ### 1. 别把含真实节点的配置提交到仓库
 
 `config/config.yaml`、`clash_node_state.json`、`.env`、`*.priority.json`
-以及各种状态文件**都已加入 `.gitignore`**。提交前请确认：
+以及各种状态文件**都已加入 `.gitignore`**。仓库采用「`config/` 白名单 + `local/` 私有目录」
+两层隔离；提交前请确认：
 
 ```bash
 git status --short          # 确认没有 config.yaml / .env / 订阅文件
 git diff --cached --stat    # 提交前再看一遍
 ```
 
+更稳妥的做法是启用提交前钩子（**只改本地 git 配置，不会入库**）：
+
+```bash
+sh scripts/install_git_hooks.sh
+# 等价于: git config core.hooksPath .githooks
+```
+
+之后每次提交都会自动执行 `scripts/check_privacy.py --staged`，检查路径、`.gitignore`
+状态和凭据内容；也可以用 `python scripts/check_privacy.py --all` 手动扫描全部已跟踪文件。
+
 订阅链接等同于账号凭证，泄露后别人可以直接消耗你的流量。
+完整的隔离方案、自检命令和泄露后的处理流程见 [docs/private-data.md](docs/private-data.md)。
 
 ### 2. 代理端口与 API 端口不要暴露到公网
 

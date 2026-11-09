@@ -25,6 +25,8 @@
 | [browser-clients.md](browser-clients.md) | Playwright / Selenium 用法；反检测最小清单；headless 检测、真实 Chrome、不要伪造 UA 等实战踩坑 | 需要真浏览器 |
 | [config-guide.md](config-guide.md) | Clash 配置文件逐字段讲解、订阅导入三种方式、本地客户端 vs Docker 的差异、常见坑 | 配置 Mihomo |
 | [logic.md](logic.md) | ClashManager 内部：切换状态机、三重验证、冷却、线程安全、多进程注意事项 | 二次开发 / 排查 |
+| [subscriptions.md](subscriptions.md) | 多订阅拉取 / 校验 / 合并 / 定期刷新、专用实例与节点测试 | 多个机场合并 |
+| [private-data.md](private-data.md) | 私有数据隔离：真实订阅 / 节点列表 / 密钥放哪里，提交前如何自动拦截 | 自己使用真实节点 |
 
 ---
 

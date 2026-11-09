@@ -205,6 +205,33 @@ def test_manager_with_static_source():
             os.remove(f)
 
 
+def test_health_refresh_not_cached():
+    """回归: refresh_nodes 后 5 分钟缓存不应让 refresh_node_health 变成 no-op。"""
+    print("\n=== 健康检测缓存回归 ===")
+    from clash_manager import ClashManager
+    tmp = os.path.join(tempfile.gettempdir(), "cm_health_test.json")
+    for f in (tmp, tmp + ".lock", tmp + ".priority.json"):
+        if os.path.exists(f):
+            os.remove(f)
+    m = ClashManager({
+        "post_switch_test_url": "https://example.com/",
+        "enable_node_switching": False,
+        "state_file": tmp,
+        "policy": {"priority_file": tmp + ".priority.json"},
+        "source": {"type": "static", "lines": [
+            "http://1.1.1.1:8080", "http://2.2.2.2:8080"]},
+    })
+    m.refresh_nodes()
+    calls = []
+    m.get_node_delay = lambda name: calls.append(name) or 123
+    m.refresh_node_health()
+    check("刷新后健康检测没有被 5 分钟缓存跳过", len(calls) == 2, f"-> {len(calls)} 次")
+    check("节点延迟已写入", all(n["delay"] == 123 for n in m.available_nodes))
+    for f in (tmp, tmp + ".lock", tmp + ".priority.json"):
+        if os.path.exists(f):
+            os.remove(f)
+
+
 def test_clients():
     print("\n=== 客户端适配层 ===")
     from clash_clients import (_ProxyFollower, classify_status,   # noqa: E402
@@ -280,6 +307,7 @@ def main():
     test_site_probe()
     test_static_source()
     test_manager_with_static_source()
+    test_health_refresh_not_cached()
     test_clients()
     test_probe_spec()
     passed = sum(_ok)

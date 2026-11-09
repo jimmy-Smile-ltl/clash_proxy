@@ -8,6 +8,12 @@
 | `geoip.metadb` | 官方发布页 | GeoIP 数据库（可选，规则分流用） |
 | `GeoSite.dat` | 官方发布页 | 域名分类数据库（可选） |
 | `cache.db` | 运行时生成 | Mihomo 自动创建的缓存 |
+| `proxies.txt` | 你自备 | 静态代理列表（可选）。放在 `config/` 下也会被忽略 |
+
+> **隔离规则**：`.gitignore` 忽略 `config/*`，只放行 `README.md` 与 `config.example.yaml`。
+> 因此往 `config/` 里放任何私有文件（订阅、节点列表、缓存、地理库）都会自动被忽略。
+> 更推荐把非 Docker 必需的私有数据统一放进 `local/` 目录（整个目录被忽略）。
+> 完整方案与提交前检查见 [../docs/private-data.md](../docs/private-data.md)。
 
 ## 下载地理数据库
 

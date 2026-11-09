@@ -19,3 +19,6 @@ requests>=2.25
 # ── 可选：真浏览器（clash_clients.browser_context）──
 # playwright>=1.30
 #   装完还要执行: playwright install chromium
+
+# ── 可选：多订阅合并 / 定期刷新（clash_subscriptions.py）──
+# pyyaml>=5.1

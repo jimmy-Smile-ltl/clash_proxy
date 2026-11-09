@@ -46,6 +46,7 @@ Scraping overseas sites means three proxy headaches:
 | 💤 **Pool-wide breaker** | When every exit is dead, stay silent instead of probing — server-side throttling is sustained *by* request rate |
 | 🎯 **Priority** | Pin/block specific nodes, restrict to certain regions, latency ceiling, prefer low-multiplier lines |
 | 🔌 **Pluggable sources** | Nodes from a Clash selector / a static proxy list (no Clash needed) / several Clash instances aggregated |
+| 🧬 **Merge subscriptions** | Multiple airport URLs / files / directories: fetch, validate, dedupe, merge, refresh on a schedule (`clash_subscriptions.py`) |
 | 🩺 **Health check** | `netcheck` in one screen: per-node latency, real exit IP, target verdict, distinct-exit count |
 | 🧩 **One-line clients** | requests / aiohttp / curl_cffi / Playwright adapters — auto proxy, auto reconnect on switch |
 | 📊 **See** everything | `stats` shows per-node downloads / rejections / cooldowns; `status` shows run mode and exit IP |
@@ -222,6 +223,11 @@ python clash_cli.py netcheck --probe 'POST:https://api.x.com/gen|code=50000'
 
 python clash_cli.py priority --pin "<node name>"   # pin a known-good node
 python clash_cli.py priority --block "<node>" --list
+
+# multi-subscription merge (optional clash_subscriptions.py; see docs/subscriptions.md)
+python clash_cli.py sub list             # sources (tokens are masked)
+python clash_cli.py sub sync --reload --test   # fetch → merge → reload → test
+python clash_cli.py sub watch --interval 21600 # refresh every 6 hours
 ```
 
 Environment variables can be placed in a `.env` file (see [.env.example](.env.example)).
@@ -263,6 +269,7 @@ Environment variables can be placed in a `.env` file (see [.env.example](.env.ex
 | `health_check_workers` | `8` | Health-check concurrency cap. **Don't set it to the node count** — dozens of simultaneous probes against one site trigger server-side rate limiting |
 | `health_check_url` | same as `post_switch_test_url` | Probe URL for delay/health checks. Defaults to the target site (do **not** use gstatic) |
 | `health_check_timeout_ms` | `10000` | Delay-test timeout (5s kills healthy nodes when the target is a heavy page) |
+| `startup_health_check` | `true` | Run a full latency sweep at startup. With 80+ merged nodes, set `false` and use `health` / `sub test` on demand |
 
 ---
 
@@ -294,21 +301,29 @@ clash_proxy/
 ├── clash_policy.py           # node priority (pin/block/region/latency/multiplier)
 ├── clash_probe.py            # site probe, per-node exit IP, network health check
 ├── clash_clients.py          # requests / aiohttp / curl_cffi / Playwright adapters
+├── clash_subscriptions.py    # multi-subscription fetch / validate / merge / refresh
 ├── docker-compose.yml        # Mihomo Docker deployment
 ├── .env.example              # environment variable template
 ├── config/
 │   ├── config.example.yaml   # sanitized Clash config template (with comments)
 │   └── README.md             # config & geo database notes
 ├── scripts/
-│   └── sync_config.sh        # sync config from a subscription file
+│   ├── sync_config.sh        # sync config from a subscription file
+│   ├── start_mihomo.ps1      # start a dedicated Mihomo instance (Windows)
+│   ├── stop_mihomo.ps1       # stop it (PID-file scoped; won't kill Clash Verge)
+│   ├── start_watch.ps1       # start dedicated instance + scheduled refresh
+│   └── stop_watch.ps1        # stop the scheduled refresh
 ├── tests/
 │   ├── sources_test.py       # offline unit tests (no network, no Clash — CI-friendly)
+│   ├── subscriptions_test.py # offline subscription parse/merge tests
 │   ├── smoke_test.py         # read-only self-check (safe to run during a scrape)
 │   └── switch_live_test.py   # live switch test (switches nodes; use a spare Clash instance)
 └── docs/
     ├── quickstart.md         # zero-to-one tutorial
     ├── config-guide.md       # Clash config explained (fields / import / pitfalls)
     ├── logic.md              # internals: switch state machine, cooldown, threading
+    ├── subscriptions.md      # multi-subscription merge / refresh / dedicated instance
+    ├── private-data.md       # keeping real subscriptions / keys out of git
     ├── http-clients.md       # usage with requests / curl_cffi / aiohttp
     └── browser-clients.md    # usage with Playwright / Selenium (incl. battle-tested pitfalls)
 ```
@@ -320,6 +335,8 @@ clash_proxy/
 | [docs/quickstart.md](docs/quickstart.md) | Zero to one: deploy → subscription → first scraper |
 | [docs/config-guide.md](docs/config-guide.md) | Clash config field-by-field, three import methods, pitfalls |
 | [docs/logic.md](docs/logic.md) | Internals: switch state machine, triple verification, cooldown |
+| [docs/subscriptions.md](docs/subscriptions.md) | Multi-subscription fetch / merge / scheduled refresh, dedicated instance |
+| [docs/private-data.md](docs/private-data.md) | Keeping real subscriptions, node lists and keys out of git |
 | [docs/http-clients.md](docs/http-clients.md) | Full usage with requests / curl_cffi / aiohttp |
 | [docs/browser-clients.md](docs/browser-clients.md) | Full usage with Playwright / Selenium |
 | [AGENTS.md](AGENTS.md) | For AI coding agents: conventions, change guide, hard-won lessons |

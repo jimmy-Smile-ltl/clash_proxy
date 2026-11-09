@@ -50,6 +50,7 @@ requests / aiohttp / curl_cffi / Playwright 集成 · Python 爬虫代理中间�
 | 💤 **全池熔断** | 所有出口都失效时静默等待，不继续试探（服务端整体限流由请求速率维持） |
 | 🎯 **优先度** | 置顶/拉黑某几个节点、只留某些地区、延迟阈值、优先低倍率线路 |
 | 🔌 **多来源** | 节点来自 Clash 策略组 / 静态代理列表（不经 Clash）/ 多个 Clash 实例聚合 |
+| 🧬 **合并订阅** | 多个机场 URL / 文件 / 目录自动拉取、去重、合并、定期刷新（`clash_subscriptions.py`） |
 | 🩺 **体检** | `netcheck` 一屏看完：逐节点延迟、真实出口 IP、目标站判定、独立出口数 |
 | 🧩 **一行接入** | requests / aiohttp / curl_cffi / Playwright 适配器，自动带代理 + 切换后自动重建连接 |
 | 📊 **看**得见 | `stats` 看每个节点的下载/被拒/冷却；`status` 看运行模式与出口 IP |
@@ -234,6 +235,12 @@ python clash_cli.py netcheck --probe 'POST:https://api.x.com/gen|code=50000'
 
 python clash_cli.py priority --pin "🇸🇬 新加坡-示例01"    # 钉住可用节点
 python clash_cli.py priority --block "🇭🇰 香港01" --list          # 拉黑 + 查看
+
+# 多订阅合并（可选扩展 clash_subscriptions.py，详见 docs/subscriptions.md）
+python clash_cli.py sub list             # 列出来源（URL 自动打码）
+python clash_cli.py sub add <url-or-file>
+python clash_cli.py sub sync --reload --test   # 拉取 → 合并 → 重载 → 测试
+python clash_cli.py sub watch --interval 21600 # 每 6 小时自动刷新
 ```
 
 环境变量可写入项目根目录 `.env` 文件（见 [.env.example](.env.example)）。
@@ -275,6 +282,7 @@ python clash_cli.py priority --block "🇭🇰 香港01" --list          # 拉�
 | `health_check_workers` | `8` | 健康检测并发上限。**别设成节点数**——几十个节点同时打目标站会触发服务端限流 |
 | `health_check_url` | 同 `post_switch_test_url` | 延迟测试/健康检测的探测 URL，默认就是目标站（**不要**改成 gstatic 之类的通用地址） |
 | `health_check_timeout_ms` | `10000` | 延迟测试超时（目标站是重页面时 5s 会误杀好节点） |
+| `startup_health_check` | `true` | 启动时是否全量测延迟。合并订阅后节点很多时可设 `false`，改用 `health` / `sub test` 按需测试 |
 
 **代理来源（可选扩展 `clash_sources.py`）**
 
@@ -332,6 +340,7 @@ clash_proxy/
 ├── clash_policy.py           # 节点优先度（置顶/拉黑/地区/延迟/倍率）
 ├── clash_probe.py            # 目标站探针、逐节点出口 IP、网络体检
 ├── clash_clients.py          # requests / aiohttp / curl_cffi / Playwright 适配器
+├── clash_subscriptions.py    # 多订阅拉取 / 校验 / 合并 / 定期刷新
 │
 ├── docker-compose.yml        # Mihomo Docker 部署
 ├── pyproject.toml            # 打包元数据（可 pip install .）
@@ -342,7 +351,11 @@ clash_proxy/
 │   ├── config.example.yaml   # Clash 配置示例(脱敏, 带讲解注释)
 │   └── README.md             # 配置文件/地理数据库说明
 ├── scripts/
-│   └── sync_config.sh        # 从订阅文件同步配置
+│   ├── sync_config.sh        # 从订阅文件同步配置
+│   ├── start_mihomo.ps1      # 启动专用 Mihomo 实例（Windows）
+│   ├── stop_mihomo.ps1       # 停止专用实例（只认 PID 文件，不误杀 Clash Verge）
+│   ├── start_watch.ps1       # 启动专用实例 + 后台定期刷新
+│   └── stop_watch.ps1        # 停止后台刷新
 ├── tests/
 │   ├── sources_test.py       # 离线单测（不联网、不需要 Clash，可进 CI）
 │   ├── smoke_test.py         # 冒烟自检（只读，不切节点，可安全在采集期间跑）
@@ -387,6 +400,8 @@ python tests/smoke_test.py
 | [docs/quickstart.md](docs/quickstart.md) | 从零到一：部署 → 订阅 → 第一个采集脚本 |
 | [docs/config-guide.md](docs/config-guide.md) | Clash 配置文件逐字段讲解、订阅导入三种方式、常见坑 |
 | [docs/logic.md](docs/logic.md) | ClashManager 内部逻辑：切换状态机、三重验证、冷却机制 |
+| [docs/subscriptions.md](docs/subscriptions.md) | 多订阅拉取 / 合并 / 定期刷新、专用实例、节点测试 |
+| [docs/private-data.md](docs/private-data.md) | 私有数据隔离：真实订阅 / 节点列表 / 密钥放哪里，提交前如何拦截 |
 | [docs/http-clients.md](docs/http-clients.md) | 代理池搭配 requests / curl_cffi / aiohttp 的完整写法 |
 | [docs/browser-clients.md](docs/browser-clients.md) | 代理池搭配 Playwright / Selenium：切换节点后如何生效、反检测清单、实战踩坑 |
 | [AGENTS.md](AGENTS.md) | 给 AI 编码 agent：项目约定、改动指引、「最贵的几条经验」 |
@@ -442,6 +457,8 @@ python tests/smoke_test.py
 ## 安全提示
 
 - 切勿把含真实节点的 `config/config.yaml` 提交到仓库（已加入 .gitignore）；
+- 详细隔离方案（`config/` 白名单、`local/` 私有目录、pre-commit 检查、泄露后处理）见
+  [docs/private-data.md](docs/private-data.md)；
 - 代理端口与 API 端口默认仅监听 `127.0.0.1`，不要暴露到公网；
 - 请遵守目标网站的 robots.txt 与当地法律法规。
 

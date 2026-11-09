@@ -61,6 +61,17 @@ def _env_list(name: str) -> List[str]:
     return [x.strip() for x in raw.split(",") if x.strip()]
 
 
+def _env_int(name: str, default: int) -> int:
+    """读取整数型环境变量，非法值回退默认。"""
+    raw = os.environ.get(name, "").strip()
+    if not raw:
+        return default
+    try:
+        return int(raw)
+    except ValueError:
+        return default
+
+
 def get_config():
     cfg = {
         "api_url": os.environ.get("CLASH_API_URL", "http://127.0.0.1:9099"),
@@ -100,6 +111,30 @@ def get_config():
     # 设了 CLASH_STATIC_PROXIES 就改用静态代理列表（不经过 Clash）
     if os.environ.get("CLASH_STATIC_PROXIES"):
         cfg["source"] = {"type": "static", "file": os.environ["CLASH_STATIC_PROXIES"]}
+
+    # 订阅合并（可选扩展 clash_subscriptions.py）
+    cfg.update({
+        "subscription_file": os.environ.get("CLASH_SUBSCRIPTION_FILE", "local/subscriptions.txt"),
+        "subscription_cache_dir": os.environ.get("CLASH_SUBSCRIPTION_CACHE", "local/subscriptions/cache"),
+        "subscription_output": os.environ.get("CLASH_SUBSCRIPTION_OUT", "config/config.yaml"),
+        "subscription_template": os.environ.get("CLASH_SUBSCRIPTION_TEMPLATE",
+                                                "config/config.example.yaml"),
+        "subscription_group": os.environ.get("CLASH_SUBSCRIPTION_GROUP", "🚀节点选择"),
+        "subscription_proxies_output": os.environ.get("CLASH_SUBSCRIPTION_PROXIES_OUT",
+                                                       "local/subscriptions/merged-proxies.yaml"),
+        "subscription_meta_output": os.environ.get("CLASH_SUBSCRIPTION_META_OUT",
+                                                    "local/subscriptions/last_sync.json"),
+        "subscription_interval": _env_int("CLASH_SUBSCRIPTION_INTERVAL", 21600),
+        "subscription_timeout": _env_int("CLASH_SUBSCRIPTION_TIMEOUT", 30),
+        "subscription_ua": os.environ.get("CLASH_SUBSCRIPTION_UA", "clash-verge/v2.0.0"),
+        "subscription_proxy": os.environ.get("CLASH_SUBSCRIPTION_PROXY", ""),
+        "subscription_base": os.environ.get("CLASH_SUBSCRIPTION_BASE", "auto"),
+        "subscription_mode": os.environ.get("CLASH_SUBSCRIPTION_MODE", "base"),
+        "subscription_api_listen": os.environ.get("CLASH_SUBSCRIPTION_API_LISTEN", ""),
+        "subscription_mixed_port": os.environ.get("CLASH_SUBSCRIPTION_MIXED_PORT", ""),
+        "subscription_secret": os.environ.get("CLASH_SUBSCRIPTION_SECRET", ""),
+    })
+    cfg["startup_health_check"] = _env_bool("CLASH_STARTUP_HEALTH_CHECK", True)
     return cfg
 
 
@@ -183,7 +218,7 @@ def cmd_stats(manager: ClashManager):
 
 def cmd_health(manager: ClashManager):
     manager.refresh_nodes()
-    manager.refresh_node_health()
+    manager.refresh_node_health(force=True)
     print(f"测延迟中... (策略组: {manager.group_name})")
     print("-" * 50)
     for node in manager.available_nodes:
@@ -329,7 +364,33 @@ def cmd_netcheck(manager: ClashManager, nodes=None, workers: int = 4,
               "轮换它们没有意义")
 
 
+def _add_sub_sync_args(parser):
+    """sub sync / sub watch 共用的参数。"""
+    parser.add_argument("--allow-partial", action="store_true",
+                        help="某个来源失败时跳过，继续合并其它来源（默认中止）")
+    parser.add_argument("--base", default="",
+                        help="基底：auto / template / 来源序号（1 起）")
+    parser.add_argument("--mode", default="", choices=["", "base", "rule", "global", "direct"],
+                        help="生成配置的 mode（默认保留基底）")
+    parser.add_argument("--group", default="", help="管理组名")
+    parser.add_argument("--out", default="", help="输出配置路径")
+    parser.add_argument("--template", default="", help="模板路径（--base template 时使用）")
+    parser.add_argument("--api-listen", default="",
+                        help="写入 external-controller，如 127.0.0.1:9098")
+    parser.add_argument("--mixed-port", default="", help="写入 mixed-port，如 7898")
+    parser.add_argument("--secret", default="", help="写入配置的 API secret（可选）")
+    parser.add_argument("--test-url", default="", help="节点测试 URL")
+    parser.add_argument("--workers", type=int, default=8, help="节点测试并发数")
+
+
 def main():
+    # Windows 控制台/重定向默认可能是 GBK，中文日志会乱码或 UnicodeEncodeError
+    for stream in (sys.stdout, sys.stderr):
+        try:
+            stream.reconfigure(encoding="utf-8", errors="replace")
+        except Exception:
+            pass
+
     parser = argparse.ArgumentParser(description="Clash 代理池节点管理")
     sub = parser.add_subparsers(dest="command", help="子命令")
 
@@ -356,6 +417,29 @@ def main():
     pp.add_argument("--block", action="append", help="拉黑某节点（可重复）")
     pp.add_argument("--unblock", action="append", help="解除拉黑（可重复）")
 
+    sp_sub = sub.add_parser("sub", help="订阅源管理：拉取 / 合并 / 定期刷新 / 测试")
+    subsub = sp_sub.add_subparsers(dest="sub_command")
+    subsub.add_parser("list", help="列出订阅来源")
+    sa = subsub.add_parser("add", help="添加来源（URL / 文件 / 目录）")
+    sa.add_argument("source")
+    sr = subsub.add_parser("remove", help="删除第 N 个来源")
+    sr.add_argument("index", type=int)
+    ss = subsub.add_parser("sync", help="拉取并合并一次")
+    _add_sub_sync_args(ss)
+    ss.add_argument("--dry-run", action="store_true", help="只解析合并，不写文件")
+    ss.add_argument("--reload", action="store_true", help="写入后调用 Clash API 重载")
+    ss.add_argument("--test", action="store_true", help="写入后测试节点延迟")
+    st = subsub.add_parser("test", help="测试当前 Clash 分组里的节点")
+    st.add_argument("--test-url", default="", help="延迟测试 URL")
+    st.add_argument("--workers", type=int, default=8, help="并发数")
+    st.add_argument("--group", default="", help="策略组名")
+    st.add_argument("--secret", default="", help="Clash API secret（默认读 .env）")
+    sw = subsub.add_parser("watch", help="按间隔定期刷新")
+    _add_sub_sync_args(sw)
+    sw.add_argument("--interval", type=int, default=0, help="刷新间隔秒数")
+    sw.add_argument("--no-reload", action="store_true", help="不自动重载 Clash")
+    sw.add_argument("--no-test", action="store_true", help="不自动测试节点")
+
     args = parser.parse_args()
     if not args.command:
         parser.print_help()
@@ -363,6 +447,11 @@ def main():
 
     load_dotenv()
     logging.basicConfig(level=logging.INFO, format="%(message)s")
+
+    # 订阅管理不需要先构造 ClashManager（Clash 没开也能拉取/合并）
+    if args.command == "sub":
+        from clash_subscriptions import cmd_sub
+        sys.exit(cmd_sub(args, get_config()))
 
     manager = ClashManager(get_config())
 

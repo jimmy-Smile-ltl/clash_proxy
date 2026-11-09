@@ -1,0 +1,28 @@
+#!/bin/sh
+# 提交前隐私检查：阻止真实订阅 / 节点列表 / 密钥 / 状态文件进入公开仓库。
+#
+# 安装（每个克隆执行一次，属于本地 git 配置，不会入库）:
+#     git config core.hooksPath .githooks
+#
+# 撤销:
+#     git config --unset core.hooksPath
+#
+# 跳过（不推荐；提交前请自己确认）:
+#     git commit --no-verify
+
+set -e
+
+# 兼容 Windows Git Bash / Linux / macOS 的 Python 查找
+if command -v python3 >/dev/null 2>&1 && python3 -c "import sys" >/dev/null 2>&1; then
+    PY="python3"
+elif command -v py >/dev/null 2>&1; then
+    PY="py -3"
+elif command -v python >/dev/null 2>&1 && python -c "import sys" >/dev/null 2>&1; then
+    PY="python"
+else
+    echo "[❌] 未找到可用的 Python，无法执行隐私检查" >&2
+    echo "    安装 Python 3 后重试，或临时用 git commit --no-verify 跳过（不推荐）" >&2
+    exit 1
+fi
+
+exec $PY scripts/check_privacy.py --staged

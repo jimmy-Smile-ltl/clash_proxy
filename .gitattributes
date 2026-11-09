@@ -1,0 +1,6 @@
+# 跨平台换行符约定
+* text=auto
+
+# Git 钩子与 shell 脚本必须保持 LF，否则 Windows 上可能无法执行
+.githooks/* text eol=lf
+*.sh text eol=lf

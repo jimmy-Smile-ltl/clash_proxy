@@ -2,6 +2,28 @@
 
 本项目遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 
+## [2.1.0] — 2026-11
+
+### 新增
+
+- **`clash_subscriptions.py` —— 多订阅合并与定期刷新**：
+  - 来源支持 URL / 文件 / 目录自动识别；
+  - URL 失败自动回退缓存或 `local/subscriptions/manual/<hash>.yaml` 手动文件；
+  - 解析 Clash YAML/JSON、base64 与常见 URI 列表；
+  - 过滤订阅元数据 / 无效节点，跨源去重，同名不同配置自动改名；
+  - 以某个来源的完整配置为基底（保留 rules/groups），或使用干净模板；
+  - 输出 `config/config.yaml` + `local/subscriptions/merged-proxies.yaml`；
+  - `clash_cli.py sub list/add/remove/sync/watch/test`。
+- **`docs/subscriptions.md`**：合并策略、专用实例、定期刷新与节点测试。
+- **私有数据隔离**：`config/` 白名单 + `local/` 私有目录 + `scripts/check_privacy.py`
+  + pre-commit 钩子 + `docs/private-data.md`。
+
+### 修复
+
+- **`refresh_nodes()` 后健康检测被 5 分钟缓存跳过**：新节点初始 `last_check=0`，
+  `refresh_node_health(force=True)` 可强制重测。`clash_cli.py health` 与订阅测试使用强制模式。
+- **非节点类型大小写**：订阅里 `type: direct` 这类小写写法现在也会被过滤。
+
 ## [2.0.0] — 2026-10
 
 一次围绕「切换到底有没有真的生效」的大修，外加可插拔来源与优先度管理。
