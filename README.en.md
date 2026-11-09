@@ -14,9 +14,150 @@
 
 **clash_proxy turns those idle nodes into a scraping proxy pool**: auto health checks, auto rotation, auto failover on bans, self-healing overnight.
 
-> One file · Three lines to integrate · Zero cost beyond your subscription
+> **3-minute setup** · One file · Three lines to integrate · Zero cost beyond your subscription
 
 **中文文档：[README.md](README.md)**
+
+---
+
+## ⚡ 3-minute quick start
+
+> Don't want to read the whole README? Copy these 5 steps.
+
+### 0. You need three things
+
+| Need | Notes |
+|---|---|
+| **Python 3.8+** | `python --version` works |
+| **A Clash / Mihomo instance** | Clash Verge / Clash for Windows / Docker all work |
+| **An airport subscription** | Clash format (`clash=1`) or a node file |
+
+### 1. Install (10s)
+
+```bash
+pip install requests
+
+# for multi-subscription merge / scheduled refresh:
+pip install pyyaml
+```
+
+### 2. Configure (30s)
+
+```bash
+cp .env.example .env
+```
+
+Fill four values:
+
+| Variable | Local Clash client | Docker Mihomo |
+|---|---|---|
+| `CLASH_API_URL` | `http://127.0.0.1:9097` | `http://127.0.0.1:9099` |
+| `CLASH_PROXY_PORT` | `7897` | `7777` |
+| `CLASH_SECRET` | from the client's "External Control" | `secret` in `config.yaml` |
+| `CLASH_TEST_URL` | **your target site** (e.g. `https://example.com/`) | same |
+
+Verify:
+
+```bash
+python clash_cli.py test
+```
+
+### 3. Get nodes (choose A or B)
+
+**A. Already imported into your Clash client** — skip this step.
+
+**B. Merge multiple subscriptions / auto-refresh** — put URLs or files into
+`local/subscriptions.txt` (one per line, `#` for comments):
+
+```text
+# URL / file / directory
+https://example.com/api/v1/client/subscribe?token=your-token
+D:/sub/another-airport.yaml
+local/subscriptions/extra/
+```
+
+> Create `local/` if it does not exist; it is git-ignored and never committed.
+> Or use `sub add` below — it creates the file for you.
+
+Then one command: **fetch → validate → dedupe → merge → reload → test**:
+
+```bash
+python clash_cli.py sub sync --reload --test
+```
+
+> ⚠️ `--reload` replaces the **running** Clash config. For a daily-driver client,
+> run `python clash_cli.py sub sync` first (write only); use a dedicated Mihomo
+> instance if you want automatic reloads (see [docs/subscriptions.md](docs/subscriptions.md)).
+
+Or add a source directly:
+
+```bash
+python clash_cli.py sub add "https://example.com/api/v1/client/subscribe?token=your-token"
+python clash_cli.py sub sync --reload --test
+```
+
+Scheduled refresh:
+
+```bash
+python clash_cli.py sub watch --interval 21600     # every 6 hours
+```
+
+> Keep real subscription URLs/files in `local/` (git-ignored).
+> See [docs/subscriptions.md](docs/subscriptions.md) and
+> [docs/private-data.md](docs/private-data.md).
+
+### 4. Test / experience (30s)
+
+```bash
+python clash_cli.py test      # API + proxy egress
+python clash_cli.py list      # nodes + latency
+python clash_cli.py status    # mode / current node / exit IP
+python clash_cli.py netcheck  # per-node health: latency / real exit IP / target verdict
+```
+
+Try it:
+
+```bash
+python clash_cli.py switch                 # rotate one node
+python clash_cli.py netcheck --no-exit-ip  # fast check, no switching
+python clash_cli.py stats                  # downloads / rejections / cooldowns
+```
+
+### 5. Use it in your scraper (copy-paste)
+
+```python
+from clash_cli import load_dotenv, get_config
+from clash_manager import ClashManager
+from clash_clients import session
+
+load_dotenv()                          # read .env from the project root
+manager = ClashManager(get_config())   # reads CLASH_* settings
+
+with session(manager) as s:            # auto proxy + reconnect on switch + auto verdicts
+    r = s.get("https://your-target-site/")
+    print(r.status_code)
+```
+
+> Running from another directory? `pip install -e .` or add the project root to `sys.path`.
+
+Only want a proxy address?
+
+```python
+proxies = {
+    "http": "http://127.0.0.1:7897",   # Docker: 7777
+    "https": "http://127.0.0.1:7897",
+}
+```
+
+### 30-second troubleshooting
+
+| Symptom | Fix |
+|---|---|
+| `Clash API unreachable` | Wrong port / secret; check External Control or Docker 9099 |
+| `401 Unauthorized` | `CLASH_SECRET` does not match the client/config |
+| Constant `403`s | `python clash_cli.py switch --strategy least_403` |
+| Switch succeeds but exit IP does not change | Clash is in rule mode; set `CLASH_FORCE_GLOBAL_MODE=true` or switch to global |
+| Subscription sync fails | The subscription host may block direct access; set `CLASH_SUBSCRIPTION_PROXY=http://127.0.0.1:7897` |
 
 ---
 
@@ -51,7 +192,7 @@ Scraping overseas sites means three proxy headaches:
 | 🧩 **One-line clients** | requests / aiohttp / curl_cffi / Playwright adapters — auto proxy, auto reconnect on switch |
 | 📊 **See** everything | `stats` shows per-node downloads / rejections / cooldowns; `status` shows run mode and exit IP |
 
-## Three lines to integrate
+## Advanced: manual ClashManager config & reporting
 
 ```python
 from clash_manager import ClashManager
@@ -269,7 +410,7 @@ Environment variables can be placed in a `.env` file (see [.env.example](.env.ex
 | `health_check_workers` | `8` | Health-check concurrency cap. **Don't set it to the node count** — dozens of simultaneous probes against one site trigger server-side rate limiting |
 | `health_check_url` | same as `post_switch_test_url` | Probe URL for delay/health checks. Defaults to the target site (do **not** use gstatic) |
 | `health_check_timeout_ms` | `10000` | Delay-test timeout (5s kills healthy nodes when the target is a heavy page) |
-| `startup_health_check` | `true` | Run a full latency sweep at startup. With 80+ merged nodes, set `false` and use `health` / `sub test` on demand |
+| `startup_health_check` | `true` | Run a full latency sweep at startup. `.env.example` sets `false` so `test`/`status` return instantly; use `health` / `sub test` for a full sweep |
 
 ---
 

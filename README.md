@@ -18,9 +18,153 @@
 Clash Verge / Clash for Windows / mihomo 节点管理 · Hysteria2 / Vless / Vmess / Trojan ·
 requests / aiohttp / curl_cffi / Playwright 集成 · Python 爬虫代理中间件。
 
-> 核心单文件 · 三行代码接入 · 机场订阅费之外零成本 · 可选扩展（多来源 / 优先度 / 网络体检 / 客户端适配）
+> **3 分钟跑通** · 核心单文件 · 三行代码接入 · 机场订阅费之外零成本 ·
+> 可选扩展（多订阅合并 / 优先度 / 网络体检 / 客户端适配）
 
 **English: [README.en.md](README.en.md)**
+
+---
+
+## ⚡ 3 分钟最快上手
+
+> 不想读长文？按下面 5 步复制粘贴即可跑通。
+
+### 0. 你只需要三样东西
+
+| 需要 | 说明 |
+|---|---|
+| **Python 3.8+** | `python --version` 能跑即可 |
+| **一个 Clash / Mihomo 实例** | Clash Verge / Clash for Windows / Docker 都行 |
+| **一份机场订阅** | Clash 格式（`clash=1`）或节点文件 |
+
+### 1. 安装（10 秒）
+
+```bash
+pip install requests
+
+# 需要「多订阅合并 / 定期刷新」再加：
+pip install pyyaml
+```
+
+### 2. 配置环境（30 秒）
+
+```bash
+cp .env.example .env
+```
+
+按你的部署方式填 4 个值：
+
+| 变量 | 本地 Clash 客户端 | Docker Mihomo |
+|---|---|---|
+| `CLASH_API_URL` | `http://127.0.0.1:9097` | `http://127.0.0.1:9099` |
+| `CLASH_PROXY_PORT` | `7897` | `7777` |
+| `CLASH_SECRET` | 客户端「外部控制」里的密钥 | `config.yaml` 里的 `secret` |
+| `CLASH_TEST_URL` | **你的目标站**（如 `https://example.com/`） | 同上 |
+
+> 拿不准端口/密钥？运行 `python clash_cli.py test`，它会直接告诉你连没连上。
+> 完整字段见 [.env.example](.env.example) 与 [docs/config-guide.md](docs/config-guide.md)。
+
+### 3. 准备节点（二选一）
+
+#### A. 已经有 Clash 客户端导入了订阅（最简单，跳过这步）
+
+你的 Clash Verge / Clash for Windows 里已经有节点 → 直接进入第 4 步。
+
+#### B. 想合并多个订阅 / 自动刷新（本项目帮你合并）
+
+把订阅地址或节点文件写进 `local/subscriptions.txt`（每行一个，`#` 开头为注释）：
+
+```text
+# 支持 URL / 文件 / 目录
+https://example.com/api/v1/client/subscribe?token=你的token
+D:/sub/另一个机场.yaml
+local/subscriptions/extra/
+```
+
+> 没有 `local/` 目录就新建一个；它已被 `.gitignore` 忽略，不会被提交。
+> 不想手动建文件也可以直接用下面的 `sub add` 命令（会自动创建）。
+
+然后一条命令：**拉取 → 校验 → 去重 → 合并 → 重载 → 测试**：
+
+```bash
+python clash_cli.py sub sync --reload --test
+```
+
+> ⚠️ `--reload` 会替换**运行中**的 Clash 配置。日常使用的 Clash 客户端建议先
+> `python clash_cli.py sub sync` 只生成配置；要自动重载请使用专用 Mihomo 实例
+> （见 [docs/subscriptions.md](docs/subscriptions.md)）。
+
+也可以直接添加来源：
+
+```bash
+python clash_cli.py sub add "https://example.com/api/v1/client/subscribe?token=你的token"
+python clash_cli.py sub sync --reload --test
+```
+
+想定期自动更新：
+
+```bash
+python clash_cli.py sub watch --interval 21600     # 每 6 小时
+```
+
+> 真实订阅 URL / 节点文件只放 `local/`（已被 `.gitignore` 忽略），不要提交到仓库。
+> 详见 [docs/subscriptions.md](docs/subscriptions.md) 与 [docs/private-data.md](docs/private-data.md)。
+
+### 4. 测试 / 体验（30 秒）
+
+```bash
+python clash_cli.py test      # API + 代理出口连通性
+python clash_cli.py list      # 查看节点 + 延迟
+python clash_cli.py status    # 当前模式 / 当前节点 / 出口 IP
+python clash_cli.py netcheck  # 逐节点体检（延迟 / 真实出口 IP / 目标站判定）
+```
+
+想直接看效果：
+
+```bash
+python clash_cli.py switch                 # 按当前策略切一个节点
+python clash_cli.py netcheck --no-exit-ip  # 快速体检，不切节点
+python clash_cli.py stats                  # 各节点下载 / 被拒 / 冷却
+```
+
+### 5. 用到你的爬虫（复制粘贴）
+
+```python
+from clash_cli import load_dotenv, get_config
+from clash_manager import ClashManager
+from clash_clients import session
+
+load_dotenv()                          # 读取项目根目录的 .env
+manager = ClashManager(get_config())   # 自动读取 CLASH_* 配置
+
+with session(manager) as s:            # 自动带代理 + 切换后重建连接 + 自动上报
+    r = s.get("https://你的目标站/")
+    print(r.status_code)
+```
+
+> 脚本不在项目根目录？先 `pip install -e .`，或把项目根目录加入 `sys.path`。
+
+不想用 ClashManager？直接拿代理地址：
+
+```python
+proxies = {
+    "http": "http://127.0.0.1:7897",   # Docker 部署改成 7777
+    "https": "http://127.0.0.1:7897",
+}
+```
+
+> 更细的写法见 [docs/http-clients.md](docs/http-clients.md)（requests / aiohttp / curl_cffi）
+> 与 [docs/browser-clients.md](docs/browser-clients.md)（Playwright / Selenium）。
+
+### 30 秒排错
+
+| 现象 | 解决 |
+|---|---|
+| `Clash API 不可达` | 端口 / secret 不对；看客户端「外部控制」或 Docker 的 9099 |
+| `401 Unauthorized` | `CLASH_SECRET` 与客户端/配置不一致 |
+| `403` 一直失败 | 换策略：`python clash_cli.py switch --strategy least_403` |
+| 切换成功但出口没变 | Clash 在 rule 模式；设 `CLASH_FORCE_GLOBAL_MODE=true` 或切 global |
+| 多订阅同步失败 | 订阅域名可能屏蔽直连；设 `CLASH_SUBSCRIPTION_PROXY=http://127.0.0.1:7897` |
 
 ---
 
@@ -55,7 +199,7 @@ requests / aiohttp / curl_cffi / Playwright 集成 · Python 爬虫代理中间�
 | 🧩 **一行接入** | requests / aiohttp / curl_cffi / Playwright 适配器，自动带代理 + 切换后自动重建连接 |
 | 📊 **看**得见 | `stats` 看每个节点的下载/被拒/冷却；`status` 看运行模式与出口 IP |
 
-## 三行代码接入爬虫
+## 进阶：手动配置 ClashManager 与上报
 
 ```python
 from clash_manager import ClashManager
@@ -282,7 +426,7 @@ python clash_cli.py sub watch --interval 21600 # 每 6 小时自动刷新
 | `health_check_workers` | `8` | 健康检测并发上限。**别设成节点数**——几十个节点同时打目标站会触发服务端限流 |
 | `health_check_url` | 同 `post_switch_test_url` | 延迟测试/健康检测的探测 URL，默认就是目标站（**不要**改成 gstatic 之类的通用地址） |
 | `health_check_timeout_ms` | `10000` | 延迟测试超时（目标站是重页面时 5s 会误杀好节点） |
-| `startup_health_check` | `true` | 启动时是否全量测延迟。合并订阅后节点很多时可设 `false`，改用 `health` / `sub test` 按需测试 |
+| `startup_health_check` | `true` | 启动时是否全量测延迟。`.env.example` 中默认 `false`（让 `test`/`status` 秒回）；要完整测试用 `health` / `sub test` |
 
 **代理来源（可选扩展 `clash_sources.py`）**
 

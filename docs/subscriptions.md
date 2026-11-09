@@ -17,9 +17,41 @@
 
 ---
 
+## 3 分钟上手
+
+```bash
+pip install requests pyyaml
+
+# 1) 把订阅地址 / 节点文件写进 local/subscriptions.txt（每行一个）
+#    或直接添加：
+python clash_cli.py sub add "https://example.com/api/v1/client/subscribe?token=你的token"
+
+# 2) 拉取 → 校验 → 去重 → 合并 → 重载 → 测试
+python clash_cli.py sub sync --reload --test
+
+# 3) 每 6 小时自动刷新
+python clash_cli.py sub watch --interval 21600
+```
+
+最小来源列表（`local/subscriptions.txt`）：
+
+```text
+# URL / 文件 / 目录，每行一个
+https://example.com/api/v1/client/subscribe?token=你的token
+D:/sub/another-airport.yaml
+local/subscriptions/extra/
+```
+
+> ⚠️ `--reload` 会替换运行中的 Clash 配置；日常客户端先只 `sub sync` 生成配置，
+> 要自动重载建议用专用 Mihomo 实例（见下文第 6 节）。
+> 只想看合并结果用 `--dry-run`。
+
+---
+
 ## 1. 来源列表
 
-默认文件：`local/subscriptions.txt`（整个 `local/` 被忽略）。
+默认文件：`local/subscriptions.txt`（整个 `local/` 被忽略；文件/目录不存在时
+`sub add` 会自动创建）。
 
 ```text
 # 每行一个来源：URL / 文件 / 目录；# 开头为注释

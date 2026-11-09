@@ -15,7 +15,8 @@ clash_proxy 让你已经付费的机场订阅发挥第二份价值：订阅里�
 ## 快速开始
 
 - [README.md](README.md): 项目介绍、为什么不用商业代理池、架构图、快速开始（本地 Clash 客户端 / Docker 两种方式）、完整配置项表、FAQ
-- [docs/quickstart.md](docs/quickstart.md): 从零到一 —— 部署 → 订阅 → 第一个采集脚本
+  - 最前面是「⚡ 3 分钟最快上手」：安装 → 配 `.env` → 订阅地址/文件 → 测试 → 复制粘贴 4 行代码
+- [docs/quickstart.md](docs/quickstart.md): 从零到一 —— 部署 → 订阅 → 第一个采集脚本（顶部有「最快路径」）
 - [docs/config-guide.md](docs/config-guide.md): Clash 配置文件逐字段讲解、订阅导入三种方式、常见坑
 
 ## 集成到你的采集代码

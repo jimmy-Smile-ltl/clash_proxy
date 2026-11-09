@@ -9,7 +9,7 @@
 | 你的目的 | 看这里 |
 |---|---|
 | 先搞清楚这东西适不适合我 | [../README.md](../README.md) 的〈它解决什么问题〉〈一分钟看懂它能干什么〉 |
-| 想马上跑起来 | [quickstart.md](quickstart.md) |
+| 想马上跑起来（3 分钟） | [../README.md](../README.md) 的「⚡ 3 分钟最快上手」→ [quickstart.md](quickstart.md) |
 | 已经在用，想知道怎么接进我的代码 | [http-clients.md](http-clients.md)（HTTP 库）／[browser-clients.md](browser-clients.md)（浏览器）／或直接用 `clash_clients.py` 一行接入 |
 | 出问题了 / 想搞懂内部机制 | [logic.md](logic.md) |
 | 要改 Clash 配置文件 | [config-guide.md](config-guide.md) |

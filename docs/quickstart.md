@@ -7,6 +7,44 @@
 
 ---
 
+## 最快路径（3 分钟）
+
+如果你已经有 Clash Verge / Clash for Windows 且导入了订阅，只需：
+
+```bash
+# 1. 安装
+pip install requests
+
+# 2. 配置（本地客户端 9097/7897；Docker 用 9099/7777）
+cp .env.example .env
+#    编辑 .env：CLASH_API_URL / CLASH_PROXY_PORT / CLASH_SECRET / CLASH_TEST_URL
+
+# 3. 验证
+python clash_cli.py test
+
+# 4. 在代码里使用（详见第 3 步）
+```
+
+想合并多个订阅 / 定期刷新：
+
+```bash
+pip install pyyaml
+
+# 把订阅 URL / 文件路径写进 local/subscriptions.txt（每行一个）
+# 或者：
+python clash_cli.py sub add "https://example.com/api/v1/client/subscribe?token=你的token"
+
+python clash_cli.py sub sync --reload --test
+python clash_cli.py sub watch --interval 21600     # 每 6 小时
+```
+
+> 真实订阅只放 `local/`（已被 .gitignore 忽略），不要提交到仓库。
+> 合并细节见 [subscriptions.md](subscriptions.md)，隔离规则见 [private-data.md](private-data.md)。
+
+下面是从零部署的详细步骤。
+
+---
+
 ## 第 1 步：准备一个 Mihomo 实例
 
 二选一即可。
