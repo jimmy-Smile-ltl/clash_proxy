@@ -79,10 +79,10 @@ local/subscriptions/extra/
 > Create `local/` if it does not exist; it is git-ignored and never committed.
 > Or use `sub add` below — it creates the file for you.
 
-Then one command: **fetch → validate → dedupe → merge → reload → test**:
+Then one command: **validate → dedupe → merge → reload** (the subscription is fetched only when the gate allows, otherwise cache/manual files are used):
 
 ```bash
-python clash_cli.py sub sync --reload --test
+python clash_cli.py sub sync --reload
 ```
 
 > ⚠️ `--reload` replaces the **running** Clash config. For a daily-driver client,
@@ -93,21 +93,22 @@ Or add a source directly:
 
 ```bash
 python clash_cli.py sub add "https://example.com/api/v1/client/subscribe?token=your-token"
-python clash_cli.py sub sync --reload --test
+python clash_cli.py sub sync --reload
 ```
 
 Scheduled refresh:
 
 ```bash
-python clash_cli.py sub watch --interval 21600     # every 6 hours
+python clash_cli.py sub watch --interval 43200     # inspect every 12 hours
 ```
 
-> ⚠️ **Airport anti-abuse**: do not refresh subscriptions frequently, especially
-> without real traffic — some airports treat it as abuse and ban the account.
-> This project fetches the same URL **at most once per hour**
-> (`CLASH_SUBSCRIPTION_MIN_INTERVAL=3600`); repeated `sub sync` calls inside the
-> window use the cache and send no request. Prefer **6–12 hours** for scheduled
-> refresh; `--force` is for debugging only, never in cron.
+> ⚠️ **Strict anti-abuse gate**: subscription fetching is not periodic —
+> **at most one attempt per 24 hours, and only after the whole pool has been
+> failing for 12 consecutive hours**. While the pool has healthy nodes, only
+> cache/manual files are used and no subscription request is sent. There is
+> **no `--force`**; even when every node is down you cannot force an update.
+> Watch inspects health only (no node test by default); use
+> `python clash_cli.py sub test --limit 5` for a sampled test.
 
 > Keep real subscription URLs/files in `local/` (git-ignored).
 > See [docs/subscriptions.md](docs/subscriptions.md) and
@@ -116,11 +117,14 @@ python clash_cli.py sub watch --interval 21600     # every 6 hours
 ### 4. Test / experience (30s)
 
 ```bash
-python clash_cli.py test      # API + proxy egress
-python clash_cli.py list      # nodes + latency
-python clash_cli.py status    # mode / current node / exit IP
-python clash_cli.py netcheck  # per-node health: latency / real exit IP / target verdict
+python clash_cli.py test                 # API + proxy egress
+python clash_cli.py list                 # nodes + latency
+python clash_cli.py status               # mode / current node / exit IP
+python clash_cli.py sub test --limit 5   # sampled test of 5 nodes (1h cooldown)
 ```
+
+> Avoid frequent full sweeps: `sub test --all` tests every node (6h cooldown);
+> use it only for diagnostics.
 
 Try it:
 
@@ -165,7 +169,7 @@ proxies = {
 | Constant `403`s | `python clash_cli.py switch --strategy least_403` |
 | Switch succeeds but exit IP does not change | Clash is in rule mode; set `CLASH_FORCE_GLOBAL_MODE=true` or switch to global |
 | Subscription sync fails | The subscription host may block direct access; set `CLASH_SUBSCRIPTION_PROXY=http://127.0.0.1:7897` |
-| Airport warns about abuse / bans the account | Do not spam `--force` or shorten the watch interval; default min fetch interval is 1 hour, scheduled refresh 6–12 hours |
+| Airport warns about abuse / bans the account | Strict gate: at most one attempt per 24h, only after 12h of whole-pool failure; no `--force`. Node tests default to a 5-node sample |
 
 ---
 
@@ -375,8 +379,9 @@ python clash_cli.py priority --block "<node>" --list
 
 # multi-subscription merge (optional clash_subscriptions.py; see docs/subscriptions.md)
 python clash_cli.py sub list             # sources (tokens are masked)
-python clash_cli.py sub sync --reload --test   # fetch → merge → reload → test
-python clash_cli.py sub watch --interval 21600 # refresh every 6 hours
+python clash_cli.py sub sync --reload          # fetch only when the gate allows, else cache
+python clash_cli.py sub test --limit 5         # sampled test of 5 nodes
+python clash_cli.py sub watch --interval 43200 # inspect every 12h (no node test by default)
 ```
 
 Environment variables can be placed in a `.env` file (see [.env.example](.env.example)).
@@ -418,7 +423,7 @@ Environment variables can be placed in a `.env` file (see [.env.example](.env.ex
 | `health_check_workers` | `8` | Health-check concurrency cap. **Don't set it to the node count** — dozens of simultaneous probes against one site trigger server-side rate limiting |
 | `health_check_url` | same as `post_switch_test_url` | Probe URL for delay/health checks. Defaults to the target site (do **not** use gstatic) |
 | `health_check_timeout_ms` | `10000` | Delay-test timeout (5s kills healthy nodes when the target is a heavy page) |
-| `startup_health_check` | `true` | Run a full latency sweep at startup. `.env.example` sets `false` so `test`/`status` return instantly; use `health` / `sub test` for a full sweep |
+| `startup_health_check` | `true` | Run a full latency sweep at startup. `.env.example` sets `false` so `test`/`status` return instantly; use `health` / `sub test --all` for a full sweep (infrequently) |
 
 ---
 

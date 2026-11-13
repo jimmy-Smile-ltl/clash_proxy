@@ -26,15 +26,19 @@ pip install requests pyyaml
 #    或直接添加：
 python clash_cli.py sub add "https://example.com/api/v1/client/subscribe?token=你的token"
 
-# 2) 拉取 → 校验 → 去重 → 合并 → 重载 → 测试
-python clash_cli.py sub sync --reload --test
+# 2) 合并 + 重载（门控允许时才拉订阅，否则用缓存/手动文件）
+python clash_cli.py sub sync --reload
 
-# 3) 每 6 小时自动刷新
-python clash_cli.py sub watch --interval 21600
+# 3) 每 12 小时巡检（默认不测节点，只检查全池健康）
+python clash_cli.py sub watch --interval 43200
+
+# 4) 需要看节点质量时：只抽样 5 个
+python clash_cli.py sub test --limit 5
 ```
 
-> 默认同一 URL 1 小时内只拉取一次；重复 `sub sync` 只读缓存。
-> `--force` 仅调试用，别放进定时任务。
+> **订阅不是定期刷新**：24 小时内最多一次拉取尝试，且必须连续 12 小时
+> 检测到全池失败才会放行；全池健康时只读缓存。**没有 `--force`**，
+> 节点全部不可用也不能强制更新订阅。
 
 最小来源列表（`local/subscriptions.txt`）：
 
@@ -54,21 +58,28 @@ local/subscriptions/extra/
 ## 更新频率与防封（必读）
 
 机场常见风控：**高频更新订阅（尤其没有实际流量时）**会被判定为滥用，
-可能收到警告甚至封号。本项目内置了保护：
+可能收到警告甚至封号。本项目采用**严格门控**，不是「定期刷新」：
 
-- 同一个 URL 默认 **3600 秒内只成功拉取一次**
-  （`CLASH_SUBSCRIPTION_MIN_INTERVAL`）；间隔内 `sub sync` / `sub watch`
-  只读缓存，**不会向订阅服务器发请求**。
-- `sub watch` 默认 6 小时；低于 30 分钟会被强制提升到 30 分钟并警告。
-- 建议定期刷新 **6–12 小时**；不要为了「节点更新更快」而缩短间隔。
-- `--force` 只用于调试，**不要**放进 cron / 定时任务。
-- 订阅 URL 不要公开分享；泄露后别人高频拉取也会连累你的账号。
+- **24 小时内最多一次订阅 URL 拉取尝试**（失败也算一次）。
+- 必须**连续 12 小时检测到全池失败**才允许这次尝试。全池失败通过抽样
+  **5 个节点全部失败**判定（避免全量探测）；任意节点恢复就重置计时。
+- **全池健康时永远不拉订阅**——只用缓存 / 手动文件，哪怕缓存已经放了很久。
+- **没有 `--force`**。即使节点全部不可用，也不能手动强制更新订阅；
+  等 24h + 12h 条件满足后才会自动放行一次。
+- 新装 / 无缓存时的首次拉取是唯一例外（bootstrap），同样受 24h 一次限制；
+  失败就请手动把订阅内容复制到 `local/subscriptions/manual/<hash>.yaml`。
+- `sub watch` 默认 **12 小时**巡检，且**默认不测试节点**；低于 30 分钟会被
+  强制提升到 30 分钟并警告。
+- `sub test` 默认只抽样 5 个节点，**1 小时冷却**；`--all` 全量测试
+  **6 小时冷却**。不要频繁全量测试。
 - 机场限流/风控时可能返回 **HTTP 200 但只有一个「剩余流量」占位节点**。
   本项目会统计有效节点数：**0 个，或比旧缓存骤降 50% 以上**时视为异常响应，
   保留旧缓存 / 手动文件，不会把节点池覆盖成空。
-- 已经收到机场警告：先暂停高频更新（本项目默认已限制），联系机场说明；
+- 订阅 URL 不要公开分享；泄露后别人高频拉取也会连累你的账号。
+- 已经收到机场警告：先暂停更新（本项目默认已限制），联系机场说明；
   必要时重置订阅链接，再更新 `local/subscriptions.txt`。
   如果某个订阅暂时被限流，可以把它换成手动恢复的节点文件先顶着。
+- 门控状态保存在 `local/subscriptions/update_gate.json`，重启/多进程也生效。
 
 ---
 
@@ -176,14 +187,17 @@ CLASH_SUBSCRIPTION_PROXY=http://127.0.0.1:7897
 ## 5. 一次同步 / 定期刷新
 
 ```bash
-# 拉取 + 合并 + 写配置（不碰运行中的 Clash）
+# 合并且只写配置（不碰运行中的 Clash；订阅是否拉取由门控决定）
 python clash_cli.py sub sync
 
-# 写入后重载 Mihomo，并测试合并后的节点
-python clash_cli.py sub sync --reload --test
+# 写入后重载 Mihomo（不默认测节点）
+python clash_cli.py sub sync --reload
 
-# 每 6 小时刷新一次（默认 reload + test）
-python clash_cli.py sub watch --interval 21600
+# 每 12 小时巡检（默认不测节点）
+python clash_cli.py sub watch --interval 43200
+
+# 需要看节点质量时，只抽样 5 个
+python clash_cli.py sub test --limit 5
 ```
 
 `sub sync` 常用参数：
@@ -198,12 +212,13 @@ python clash_cli.py sub watch --interval 21600
 | `--mixed-port PORT` | 写入 `mixed-port` |
 | `--secret STR` | 写入 API secret（建议用 `.env`） |
 | `--reload` | 调用 Clash API 重载 |
-| `--test` | 测试节点延迟 |
+| `--test` | 抽样测试节点延迟（默认 5 个） |
+| `--test-limit N` | 抽样数量；全量请用 `sub test --all` |
 | `--allow-partial` | 某来源失败时跳过 |
 | `--dry-run` | 只解析合并，不写文件 |
 
-长期运行建议用系统服务 / 计划任务执行 `sub sync --reload --test`，
-或者让 `sub watch` 常驻。Windows 可以直接用：
+长期运行建议用系统服务 / 计划任务执行 `sub sync --reload`（或 `sub watch`），
+不要用 `--test` 做例行任务。Windows 可以直接用：
 
 ```powershell
 # 启动专用实例 + 后台定期刷新（PID/日志都在 local/subscriptions/）
@@ -211,7 +226,8 @@ powershell -NoProfile -ExecutionPolicy Bypass -File scripts\start_watch.ps1
 powershell -NoProfile -ExecutionPolicy Bypass -File scripts\stop_watch.ps1
 ```
 
-Linux / 服务器上可用 systemd timer 或 cron 调用同一条 `sub sync --reload --test`。
+Linux / 服务器上可用 systemd timer 或 cron 调用同一条 `sub sync --reload`；
+订阅是否真正拉取仍由 24h/12h 门控决定。
 
 ---
 
@@ -248,10 +264,11 @@ CLASH_SUBSCRIPTION_SECRET=你的强随机串
 生成配置：
 
 ```bash
-python clash_cli.py sub sync --reload --test
+python clash_cli.py sub sync --reload
 ```
 
 > `--reload` 需要专用实例已经启动。第一次先生成配置，再启动实例。
+> 订阅是否真正拉取由 24h/12h 门控决定；全池健康时只读缓存。
 
 启动（Windows，Clash Verge 自带 `verge-mihomo.exe`）：
 
@@ -279,23 +296,37 @@ Linux / 服务器上同理，`-d` 目录里放 `geoip.dat` / `geosite.dat` / `Co
 验证：
 
 ```bash
-python clash_cli.py sub test
-python clash_cli.py test        # API + 代理出口连通性
+python clash_cli.py sub test --limit 5   # 抽样 5 个（1h 冷却）
+python clash_cli.py test                 # API + 代理出口连通性
 ```
 
 ---
 
-## 7. 节点测试
+## 7. 节点测试（默认只抽样）
 
-`sub test` / `sub sync --test` 通过 Clash API 的 `/proxies/{name}/delay`
-逐节点测延迟，并发默认 8：
+`sub test` **默认只抽 5 个节点**，且有冷却：
+
+| 命令 | 行为 | 冷却 |
+|---|---|---|
+| `sub test` | 随机抽样 5 个 | 1 小时 |
+| `sub test --all` | 全量测试所有节点 | 6 小时 |
+| `sub sync --test` | 刷新后抽样 5 个 | 1 小时 |
+| `sub watch --test` | 巡检时抽样 5 个（默认关闭） | 1 小时 |
+| `sub watch`（默认） | **不测试节点**，只做 5 节点健康抽样用于更新门控 | — |
+
+为什么默认不测完：
+
+- 80+ 节点全量测一遍会产生大量连接；没跑采集时，这类「只测不采」的
+  流量模式同样容易被机场风控盯上；
+- 抽样 5 个足够判断「池子是不是整体挂了」，精确的逐节点延迟只在需要时用。
+
+其他：
 
 - 测试 URL 默认 `https://www.gstatic.com/generate_204`；
 - 生产采集建议改成**目标站**（`--test-url` 或 `CLASH_TEST_URL`），
   因为「通 gstatic」不代表「能到目标站」；
-- 并发不要调到节点数：几十个节点同时打同一个站会触发服务端整体限流。
-
-测试结果会按延迟排序打印；节点名只出现在终端 / 本地日志，不会入库。
+- 并发不要调到节点数：几十个节点同时打同一个站会触发服务端整体限流；
+- 测试结果会按延迟排序打印；节点名只出现在终端 / 本地日志，不会入库。
 
 ---
 
@@ -329,6 +360,10 @@ python clash_cli.py test        # API + 代理出口连通性
 **Q: 切换了组，出口 IP 还是国内的？**
 global 模式下实际出口是 `GLOBAL` 组，不是 `🚀节点选择`。把 `CLASH_GROUP_NAME`
 设为 `GLOBAL`（本项目默认如此）。
+
+**Q: 为什么 `sub sync` 没有拉新订阅？**
+订阅更新受严格门控：**24 小时内最多一次尝试，且必须连续 12 小时全池失败**。
+全池健康时只读缓存/手动文件；没有 `--force`，节点全挂也不能强制更新。
 
 **Q: 为什么 `sub sync` 不自动重载？**
 重载会真实替换运行中的配置，默认保守不执行；加 `--reload` 或使用 `sub watch`。

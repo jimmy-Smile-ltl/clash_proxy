@@ -34,10 +34,12 @@ pip install pyyaml
 # 或者：
 python clash_cli.py sub add "https://example.com/api/v1/client/subscribe?token=你的token"
 
-python clash_cli.py sub sync --reload --test
-python clash_cli.py sub watch --interval 21600     # 每 6 小时
+python clash_cli.py sub sync --reload
+python clash_cli.py sub watch --interval 43200     # 每 12 小时巡检
 ```
 
+> 订阅更新受严格门控：24 小时内最多一次尝试，且必须连续 12 小时全池失败；
+> 全池健康时只读缓存，**没有 `--force`**。节点测试默认只抽样 5 个。
 > 真实订阅只放 `local/`（已被 .gitignore 忽略），不要提交到仓库。
 > 合并细节见 [subscriptions.md](subscriptions.md)，隔离规则见 [private-data.md](private-data.md)。
 

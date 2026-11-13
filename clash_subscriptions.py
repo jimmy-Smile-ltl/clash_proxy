@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""clash_subscriptions.py — 多订阅源拉取 / 校验 / 合并 / 定期刷新。
+"""clash_subscriptions.py — 多订阅源拉取 / 校验 / 合并 / 巡检（严格防封门控）。
 
 解决什么问题
 ------------
@@ -29,6 +29,17 @@ URL 拉取失败时依次回退：
 2. `local/subscriptions/manual/<hash>.yaml`（你手动复制进去的内容）
 3. 都没有 → 报错并告诉你手动文件的准确路径；默认中止合并（`--allow-partial` 可跳过）
 
+订阅更新门控（重要）
+--------------------
+**不能频繁更新订阅**，否则机场会判定滥用并封号：
+
+- **24 小时内最多一次**订阅 URL 拉取「尝试」（失败也算）；
+- 必须**连续 12 小时检测到全池失败**（抽样 5 个节点全部失败）才放行；
+- 全池健康时只读缓存/手动文件，**不做例行订阅更新**；
+- **没有 `--force`**，节点全部不可用也不能强制更新订阅；
+- 无缓存时的首次拉取（bootstrap）是唯一例外，同样受 24h 一次限制；
+- 节点测试默认抽样 5 个，1 小时冷却；`--all` 全量 6 小时冷却。
+
 隐私
 ----
 真实订阅 URL / 节点凭据只存在于 `local/` 和 `config/config.yaml`，两者均被
@@ -45,9 +56,9 @@ URL 拉取失败时依次回退：
 
     python clash_cli.py sub list
     python clash_cli.py sub add https://example.com/sub?token=...
-    python clash_cli.py sub sync --reload --test
-    python clash_cli.py sub watch --interval 21600
-    python clash_cli.py sub test
+    python clash_cli.py sub sync --reload          # 门控允许时才拉订阅
+    python clash_cli.py sub watch --interval 43200 # 12h 巡检，默认不测节点
+    python clash_cli.py sub test --limit 5         # 抽样 5 个（1h 冷却）
 
 也可以单独调用：
 
@@ -60,6 +71,7 @@ import hashlib
 import json
 import logging
 import os
+import random
 import shutil
 import time
 from dataclasses import dataclass, field
@@ -105,6 +117,21 @@ _SUPPORTED_FILE_EXT = (".yaml", ".yml", ".json", ".txt")
 
 # 定期刷新下限（秒）。低于 30 分钟极易触发机场「高频更新」滥用风控。
 _MIN_WATCH_INTERVAL = 1800
+
+# 节点测试：默认只抽样 5 个，且 1 小时内不重复全量测试。
+# 89 个节点全量测一遍会产生大量连接，没跑采集时同样容易被风控盯上。
+_DEFAULT_TEST_LIMIT = 5
+_MIN_TEST_INTERVAL = 3600
+_FULL_TEST_COOLDOWN = 6 * 3600
+
+# 订阅更新门控（用户要求，不可用 --force 绕过）：
+#   - 24 小时内最多允许一次订阅拉取「尝试」；
+#   - 且必须已经连续 12 小时检测到「全池失败」（抽样 5 个节点全部失败）；
+#   - 全池健康时不做例行订阅更新，只用缓存 / 手动文件。
+_UPDATE_INTERVAL = 24 * 3600
+_FAILURE_WINDOW = 12 * 3600
+_HEALTH_SAMPLE = 5
+_HEALTH_INTERVAL = 3600
 
 # 服务器地址明显是本地/占位时跳过
 _LOCAL_SERVERS = {"127.0.0.1", "localhost", "0.0.0.0", "::1", "[::1]"}
@@ -351,6 +378,142 @@ def _cache_age(cache_raw: str, cache_meta: str) -> Optional[float]:
     return None
 
 
+def _gate_path(cfg: Dict[str, Any]) -> str:
+    return (cfg.get("subscription_gate_file")
+            or "local/subscriptions/update_gate.json")
+
+
+def _load_gate(path: str) -> Dict[str, Any]:
+    gate = {
+        "last_attempt_at": 0, "last_success_at": 0, "failure_since": 0,
+        "last_health_at": 0, "last_health_ok": None,
+        "last_health_healthy": 0, "last_health_total": 0,
+        "last_health_error": "",
+    }
+    try:
+        with open(_abs_path(path), "r", encoding="utf-8") as f:
+            data = json.load(f) or {}
+        if isinstance(data, dict):
+            gate.update(data)
+    except Exception:
+        pass
+    return gate
+
+
+def _save_gate(path: str, gate: Dict[str, Any]) -> None:
+    try:
+        _atomic_write(_abs_path(path), json.dumps(gate, ensure_ascii=False, indent=2))
+    except Exception as e:
+        logger.warning("[⚠️] 保存订阅更新门控失败: %s", e)
+
+
+def _gate_allows_fetch(gate: Dict[str, Any], now: Optional[float] = None) -> Tuple[bool, str]:
+    """是否允许发起一次订阅 URL 拉取（全局：24h 内最多一次，且全池失败 12h）。"""
+    now = now or time.time()
+    last = float(gate.get("last_attempt_at") or 0)
+    if last and now - last < _UPDATE_INTERVAL:
+        return False, "距上次订阅尝试 %.1f 小时（需 ≥%s 小时）" % (
+            (now - last) / 3600.0, _UPDATE_INTERVAL // 3600)
+    since = float(gate.get("failure_since") or 0)
+    if since <= 0:
+        return False, "尚未检测到「全池连续失败」"
+    if now - since < _FAILURE_WINDOW:
+        return False, "全池失败仅持续 %.1f 小时（需 ≥%s 小时）" % (
+            (now - since) / 3600.0, _FAILURE_WINDOW // 3600)
+    return True, ""
+
+
+def _update_gate_health(path: str, gate: Dict[str, Any],
+                        health: Dict[str, Any], now: Optional[float] = None) -> Dict[str, Any]:
+    now = now or time.time()
+    gate["last_health_at"] = now
+    if not health.get("ok"):
+        gate["last_health_ok"] = False
+        gate["last_health_error"] = health.get("error") or "健康检查失败"
+        _save_gate(path, gate)
+        return gate
+
+    healthy = int(health.get("healthy") or 0)
+    gate["last_health_ok"] = True
+    gate["last_health_healthy"] = healthy
+    gate["last_health_total"] = health.get("total")
+    gate["last_health_error"] = ""
+    if healthy > 0:
+        gate["failure_since"] = 0
+    elif not gate.get("failure_since"):
+        gate["failure_since"] = now
+    _save_gate(path, gate)
+    return gate
+
+
+def _health_is_fresh(gate: Dict[str, Any], now: Optional[float] = None) -> bool:
+    now = now or time.time()
+    last = float(gate.get("last_health_at") or 0)
+    return bool(last and now - last < _HEALTH_INTERVAL
+                and gate.get("last_health_ok") is not None)
+
+
+def _source_has_valid_cache(spec: SourceSpec, cache_dir: str) -> bool:
+    if spec.kind != "url":
+        return True
+    cache_raw, _, manual = _cache_paths(cache_dir, spec.url or spec.raw)
+    return (_count_valid_proxies(_read_text_file(cache_raw)) > 0
+            or _count_valid_proxies(_read_text_file(manual)) > 0)
+
+
+def _newest_cache_time(specs: Sequence[SourceSpec], cache_dir: str) -> float:
+    newest = 0.0
+    for spec in specs:
+        if spec.kind != "url":
+            continue
+        cache_raw, cache_meta, _ = _cache_paths(cache_dir, spec.url or spec.raw)
+        try:
+            if os.path.isfile(cache_meta):
+                with open(cache_meta, "r", encoding="utf-8") as f:
+                    meta = json.load(f) or {}
+                newest = max(newest, float(meta.get("fetched_at") or 0))
+            elif os.path.isfile(cache_raw):
+                newest = max(newest, os.path.getmtime(cache_raw))
+        except Exception:
+            pass
+    return newest
+
+
+def _fallback_source(spec_label: str, cache_raw: str, manual: str,
+                     errors: List[str]) -> Tuple[Optional[str], bool, str, str]:
+    """从缓存 / 手动文件里选一个「有有效节点」的作为回退。"""
+    candidates = []
+    for path, label in ((cache_raw, "缓存"), (manual, "手动文件")):
+        if not os.path.isfile(path):
+            continue
+        try:
+            text = _read_text_file(path)
+            valid = _count_valid_proxies(text)
+            candidates.append((valid, os.path.getmtime(path), path, label, text))
+        except OSError:
+            pass
+
+    valid_candidates = [c for c in candidates if c[0] > 0]
+    pool = valid_candidates or candidates
+    if pool:
+        pool.sort(key=lambda x: x[1], reverse=True)
+        valid, mtime, path, label, text = pool[0]
+        if valid > 0:
+            age = max(0, time.time() - mtime)
+            note = "%s（%s，%.1f 小时前，%s 个有效节点）" % (
+                "; ".join(errors), label, age / 3600, valid)
+            logger.warning("[⚠️] %s %s，使用%s: %s（%s 个有效节点）",
+                           spec_label, "; ".join(errors) or "更新受限",
+                           label, path, valid)
+            return text, True, note, path
+
+    os.makedirs(os.path.dirname(manual), exist_ok=True)
+    msg = ("%s。没有可用的有效缓存/手动文件。请手动复制订阅内容保存到 %s，"
+           "然后重新运行（无需修改来源列表）"
+           % ("; ".join(errors) or "订阅更新受限", manual))
+    return None, False, msg, ""
+
+
 def fetch_source(spec: SourceSpec, cache_dir: str, timeout: int = 30,
                  ua: str = "clash-verge/v2.0.0",
                  proxy: str = "", min_interval: int = 0,
@@ -359,7 +522,7 @@ def fetch_source(spec: SourceSpec, cache_dir: str, timeout: int = 30,
 
     :param min_interval: 同一个 URL 的最小拉取间隔（秒）。缓存未过期时
         直接返回缓存、**不发网络请求**，防止高频拉取订阅被机场判定滥用。
-    :param force: True = 忽略最小间隔，强制重新拉取（调试用）。
+    :param force: 仅底层/单元测试使用；CLI 不提供强制更新订阅的入口。
 
     :return: ``(text, from_cache, note, cache_path)``；失败时 text=None。
     """
@@ -387,7 +550,7 @@ def fetch_source(spec: SourceSpec, cache_dir: str, timeout: int = 30,
                 valid = _count_valid_proxies(text)
                 if valid > 0:
                     note = ("距上次成功拉取 %.1f 分钟，未超过最小间隔 %s 分钟，"
-                            "跳过网络请求（使用缓存；--force 可强制）"
+                            "跳过网络请求（使用缓存）"
                             % (age / 60.0, int(min_interval / 60)))
                     logger.info("[⏳] %s %s", spec.label, note)
                     return text, True, note, cache_raw
@@ -436,36 +599,7 @@ def fetch_source(spec: SourceSpec, cache_dir: str, timeout: int = 30,
         except Exception as e:
             errors.append("%s: %s" % (label, e))
 
-    # 失败回退：在缓存 / 手动文件里优先选「真正有有效节点」的，取较新的
-    candidates = []
-    for path, label in ((cache_raw, "缓存"), (manual, "手动文件")):
-        if not os.path.isfile(path):
-            continue
-        try:
-            text = _read_text_file(path)
-            valid = _count_valid_proxies(text)
-            candidates.append((valid, os.path.getmtime(path), path, label, text))
-        except OSError:
-            pass
-
-    valid_candidates = [c for c in candidates if c[0] > 0]
-    pool = valid_candidates or candidates
-    if pool:
-        pool.sort(key=lambda x: x[1], reverse=True)
-        valid, mtime, path, label, text = pool[0]
-        if valid > 0:
-            age = max(0, time.time() - mtime)
-            note = "%s（%s，%.1f 小时前，%s 个有效节点）" % (
-                "; ".join(errors), label, age / 3600, valid)
-            logger.warning("[⚠️] %s 拉取失败/响应异常(%s)，使用%s: %s（%s 个有效节点）",
-                           spec.label, "; ".join(errors), label, path, valid)
-            return text, True, note, path
-
-    # 没有有效回退：告诉用户手动文件的准确路径
-    os.makedirs(os.path.dirname(manual), exist_ok=True)
-    msg = ("%s。没有可用的有效缓存/手动文件。请手动复制订阅内容保存到 %s，"
-           "然后重新运行（无需修改来源列表）" % ("; ".join(errors), manual))
-    return None, False, msg, ""
+    return _fallback_source(spec.label, cache_raw, manual, errors)
 
 
 # ======================== 解析 ========================
@@ -978,11 +1112,54 @@ def reload_clash(api_url: str, secret: str, config_path: str,
         session.close()
 
 
+def _test_state_path(cfg: Dict[str, Any]) -> str:
+    return (cfg.get("subscription_test_state")
+            or "local/subscriptions/last_test.json")
+
+
+def _test_cooldown_remaining(state_file: str, cooldown: int) -> int:
+    """距离上次节点测试还剩多少秒冷却；没有记录 / 已过期返回 0。"""
+    if cooldown <= 0:
+        return 0
+    try:
+        with open(_abs_path(state_file), "r", encoding="utf-8") as f:
+            data = json.load(f) or {}
+        until = float(data.get("cooldown_until") or 0)
+        if until > 0:
+            return max(0, int(until - time.time()))
+        ts = float(data.get("tested_at") or 0)
+        if ts > 0:
+            return max(0, int(ts + cooldown - time.time()))
+    except Exception:
+        pass
+    return 0
+
+
+def _record_test(state_file: str, result: Dict[str, Any],
+                 cooldown: int = _MIN_TEST_INTERVAL) -> None:
+    now = time.time()
+    try:
+        _atomic_write(_abs_path(state_file), json.dumps({
+            "tested_at": now,
+            "cooldown_until": now + max(0, cooldown),
+            "total": result.get("total"),
+            "available_total": result.get("available_total"),
+            "healthy": result.get("healthy"),
+        }, ensure_ascii=False, indent=2))
+    except Exception as e:
+        logger.warning("[⚠️] 写入节点测试时间失败: %s", e)
+
+
 def test_nodes(api_url: str, secret: str, group_name: str,
                test_url: str = "https://www.gstatic.com/generate_204",
                workers: int = 8, state_file: str = "local/state/subscription_test.json",
-               timeout_ms: int = 10000) -> Dict[str, Any]:
-    """通过 Clash API 测试当前分组里的所有节点（串行切换无关，只测延迟）。"""
+               timeout_ms: int = 10000,
+               limit: Optional[int] = None) -> Dict[str, Any]:
+    """通过 Clash API 测试节点延迟。
+
+    :param limit: 只测前 N 个抽样节点（None / 0 = 全部）。默认建议抽样 5 个：
+        全量测 80+ 节点会产生大量连接，没跑采集时也容易被机场风控盯上。
+    """
     from clash_manager import ClashManager
 
     manager = ClashManager({
@@ -1002,11 +1179,26 @@ def test_nodes(api_url: str, secret: str, group_name: str,
     })
     if not manager.refresh_nodes():
         return {"ok": False, "error": "读取节点失败（API 不可达 / secret 错误 / 策略组不存在）",
-                "total": 0, "healthy": 0, "nodes": []}
-    manager.refresh_node_health(force=True)
+                "total": 0, "available_total": 0, "healthy": 0, "nodes": []}
+
+    all_nodes = manager.available_nodes
+    available_total = len(all_nodes)
+    if limit is not None and 0 < int(limit) < available_total:
+        selected = random.sample(all_nodes, int(limit))
+        for n in selected:
+            try:
+                delay = manager.get_node_delay(n["name"])
+            except Exception:
+                delay = None
+            n["delay"] = delay or 0
+            n["healthy"] = bool(delay and delay > 0)
+            n["last_check"] = time.time()
+    else:
+        manager.refresh_node_health(force=True)
+        selected = all_nodes
 
     nodes = []
-    for n in manager.available_nodes:
+    for n in selected:
         nodes.append({"name": n.get("name"), "type": n.get("type"),
                       "delay_ms": n.get("delay") or 0,
                       "healthy": bool(n.get("healthy"))})
@@ -1015,11 +1207,27 @@ def test_nodes(api_url: str, secret: str, group_name: str,
     return {
         "ok": True,
         "total": len(nodes),
+        "available_total": available_total,
+        "limited": len(nodes) < available_total,
         "healthy": len(healthy),
         "unhealthy": len(nodes) - len(healthy),
         "nodes": nodes,
         "fastest": nodes[:10],
     }
+
+
+def check_pool_health(cfg: Dict[str, Any], sample: int = _HEALTH_SAMPLE) -> Dict[str, Any]:
+    """抽样检测代理池是否整体可用（用于订阅更新门控，不拉订阅）。"""
+    return test_nodes(
+        cfg.get("api_url") or "http://127.0.0.1:9097",
+        cfg.get("secret") or "",
+        cfg.get("subscription_group") or cfg.get("group_name") or "GLOBAL",
+        test_url=(cfg.get("health_check_url")
+                  or cfg.get("post_switch_test_url")
+                  or "https://www.gstatic.com/generate_204"),
+        workers=4,
+        limit=sample,
+    )
 
 
 # ======================== 同步主流程 ========================
@@ -1049,12 +1257,17 @@ def sync(cfg: Dict[str, Any], allow_partial: bool = False,
          group: str = "", out: str = "", template: str = "",
          api_listen: str = "", mixed_port: str = "",
          secret: str = "", timeout: int = 0,
-         force: bool = False,
-         min_interval: Optional[int] = None) -> Dict[str, Any]:
+         min_interval: Optional[int] = None,
+         test_limit: int = _DEFAULT_TEST_LIMIT,
+         test_all: bool = False) -> Dict[str, Any]:
     """执行一次完整同步：拉取 → 解析 → 合并 → 写配置 →（可选）重载/测试。
 
-    :param force: 忽略订阅最小拉取间隔，强制重新请求（调试用）。
-    :param min_interval: 同一 URL 最小拉取间隔（秒）；None = 读配置，默认 3600。
+    订阅 URL 受**严格门控**：24 小时内最多一次拉取尝试，且必须已经连续
+    12 小时全池失败。没有 `--force`，节点全挂也不能强制更新订阅。
+
+    :param min_interval: 同一 URL 最小拉取间隔（秒）的底层兜底，默认 3600。
+    :param test_limit: 节点测试抽样数量（默认 5）。
+    :param test_all: True = 测试全部节点（不建议频繁）。
     """
     paths = _default_paths(cfg)
     if base:
@@ -1081,13 +1294,74 @@ def sync(cfg: Dict[str, Any], allow_partial: bool = False,
     if not specs:
         return {"ok": False, "error": "来源列表为空，请先执行 sub add <url-or-file>"}
 
+    # ---- 订阅更新门控（用户要求：24h 最多一次尝试；连续 12h 全池失败才放行）----
+    gate_path = _gate_path(cfg)
+    gate = _load_gate(gate_path)
+    now = time.time()
+    url_specs = [s for s in specs if s.kind == "url"]
+
+    # 首次升级 / 门控文件缺失：用最近一次缓存时间作为 last_attempt，
+    # 避免升级后立刻拉一次订阅。
+    if url_specs and not float(gate.get("last_attempt_at") or 0):
+        newest = _newest_cache_time(url_specs, paths["cache_dir"])
+        if newest:
+            gate["last_attempt_at"] = newest
+            _save_gate(gate_path, gate)
+
+    if url_specs:
+        has_any_cache = any(_source_has_valid_cache(s, paths["cache_dir"])
+                            for s in url_specs)
+        if has_any_cache and not _health_is_fresh(gate, now):
+            health = check_pool_health(cfg, sample=_HEALTH_SAMPLE)
+            gate = _update_gate_health(gate_path, gate, health, now)
+        allowed, gate_reason = _gate_allows_fetch(gate, now)
+    else:
+        allowed, gate_reason = False, "没有 URL 来源"
+
+    fetch_budget = 1 if allowed else 0
+    last_attempt = float(gate.get("last_attempt_at") or 0)
+    within_24h = bool(last_attempt and now - last_attempt < _UPDATE_INTERVAL)
+    logger.info("[⏳] 订阅更新门控: %s（上次尝试 %.1f 小时前）",
+                "允许一次" if allowed else "限制 - " + gate_reason,
+                (now - last_attempt) / 3600.0 if last_attempt else 0.0)
+
     parsed_sources: List[ParsedSource] = []
     failures: List[str] = []
     for spec in specs:
-        text, from_cache, note, cache_path = fetch_source(
-            spec, paths["cache_dir"], timeout=timeout,
-            ua=paths["ua"], proxy=paths["proxy"],
-            min_interval=min_interval, force=force)
+        if spec.kind == "url":
+            has_valid = _source_has_valid_cache(spec, paths["cache_dir"])
+            bootstrap = not has_valid
+            can_fetch = (fetch_budget > 0
+                         and (allowed or (bootstrap and not within_24h)))
+            if can_fetch:
+                fetch_budget -= 1
+                gate["last_attempt_at"] = time.time()
+                _save_gate(gate_path, gate)
+                logger.info("[🌐] 允许订阅更新: %s（%s）", spec.label,
+                            "首次拉取" if bootstrap else "全池失败门控放行")
+                text, from_cache, note, cache_path = fetch_source(
+                    spec, paths["cache_dir"], timeout=timeout,
+                    ua=paths["ua"], proxy=paths["proxy"],
+                    min_interval=min_interval)
+                gate["failure_since"] = time.time()
+                if text and not from_cache:
+                    gate["last_success_at"] = time.time()
+                _save_gate(gate_path, gate)
+            else:
+                cache_raw, _, manual = _cache_paths(
+                    paths["cache_dir"], spec.url or spec.raw)
+                reason = gate_reason or (
+                    "24 小时内已尝试过订阅更新" if within_24h else "未满足更新条件")
+                text, from_cache, note, cache_path = _fallback_source(
+                    spec.label, cache_raw, manual, ["订阅更新受限: " + reason])
+                logger.info("[⏳] %s 跳过订阅请求：%s（使用缓存/手动文件）",
+                            spec.label, reason)
+        else:
+            text, from_cache, note, cache_path = fetch_source(
+                spec, paths["cache_dir"], timeout=timeout,
+                ua=paths["ua"], proxy=paths["proxy"],
+                min_interval=min_interval)
+
         if text is None:
             parsed_sources.append(ParsedSource(spec=spec, ok=False, error=note))
             failures.append("%s: %s" % (spec.label, note))
@@ -1099,7 +1373,7 @@ def sync(cfg: Dict[str, Any], allow_partial: bool = False,
                 from_cache=from_cache, cache_path=cache_path,
                 unsupported_uris=unsupported))
             logger.info("[✅] %s: %s, %s 个节点%s%s", spec.label, fmt, len(proxies),
-                        ("（缓存）" if from_cache else ""),
+                        ("（缓存/手动）" if from_cache else ""),
                         ("，%s 个 URI 不支持" % unsupported if unsupported else ""))
         except Exception as e:
             parsed_sources.append(ParsedSource(spec=spec, ok=False, error=str(e)))
@@ -1138,7 +1412,14 @@ def sync(cfg: Dict[str, Any], allow_partial: bool = False,
         "config": paths["out"],
         "proxies": paths["proxies_out"],
         "min_interval": min_interval,
-        "force": bool(force),
+        "gate": {
+            "allowed": allowed,
+            "reason": gate_reason,
+            "last_attempt_at": gate.get("last_attempt_at"),
+            "failure_since": gate.get("failure_since"),
+            "last_health_ok": gate.get("last_health_ok"),
+            "last_health_healthy": gate.get("last_health_healthy"),
+        },
     }
 
     if write:
@@ -1165,10 +1446,17 @@ def sync(cfg: Dict[str, Any], allow_partial: bool = False,
         result = test_nodes(
             cfg.get("api_url") or "http://127.0.0.1:9097",
             secret or cfg.get("secret") or "", paths["group"],
-            test_url=test_url, workers=workers)
+            test_url=test_url, workers=workers,
+            limit=None if test_all else test_limit)
         summary["test"] = result
         if result.get("ok"):
-            logger.info("[📊] 节点测试: %s/%s 健康", result["healthy"], result["total"])
+            _record_test(_test_state_path(cfg), result,
+                         cooldown=(_FULL_TEST_COOLDOWN if test_all else
+                                   int(cfg.get("subscription_test_cooldown",
+                                               _MIN_TEST_INTERVAL))))
+            logger.info("[📊] 节点测试: %s/%s 健康（样本 %s/%s）",
+                        result["healthy"], result["total"],
+                        result["total"], result.get("available_total"))
         else:
             logger.warning("[⚠️] 节点测试失败: %s", result.get("error"))
 
@@ -1210,6 +1498,9 @@ def _print_sync_summary(result: Dict[str, Any]) -> None:
     print("  管理组: %s" % result["group"])
     print("  配置输出: %s" % result["config"])
     print("  纯节点列表: %s" % result["proxies"])
+    gate = result.get("gate") or {}
+    print("  订阅门控: %s" % ("允许一次" if gate.get("allowed")
+                              else "限制 - " + str(gate.get("reason") or "")))
     if result.get("failures"):
         print("  ⚠️ 失败来源（已用缓存/手动文件或跳过）:")
         for f in result["failures"]:
@@ -1219,7 +1510,8 @@ def _print_sync_summary(result: Dict[str, Any]) -> None:
     if "test" in result:
         t = result["test"]
         if t.get("ok"):
-            print("  节点测试: %s/%s 健康" % (t["healthy"], t["total"]))
+            print("  节点测试: %s/%s 健康（样本 %s/%s）" % (
+                t["healthy"], t["total"], t["total"], t.get("available_total")))
         else:
             print("  节点测试失败: %s" % t.get("error"))
 
@@ -1244,8 +1536,9 @@ def _sync_from_args(args, cfg: Dict[str, Any], write: bool,
             api_listen=args.api_listen,
             mixed_port=args.mixed_port,
             secret=args.secret,
-            force=getattr(args, "force", False),
             min_interval=args.min_interval,
+            test_limit=args.test_limit,
+            test_all=False,
         )
     except Exception as e:
         logger.error("[‼] 同步异常: %s", e)
@@ -1274,6 +1567,18 @@ def cmd_sub(args, cfg: Dict[str, Any]) -> int:
         return 0 if result.get("ok") else 1
 
     if sub == "test":
+        state = _test_state_path(cfg)
+        cooldown = int(cfg.get("subscription_test_cooldown", _MIN_TEST_INTERVAL))
+        if args.all:
+            cooldown = max(cooldown, _FULL_TEST_COOLDOWN)
+        remaining = _test_cooldown_remaining(state, cooldown)
+        if remaining > 0:
+            print("[⏳] 上次节点测试在 %.1f 分钟前；冷却 %s 分钟，本次跳过"
+                  "（避免频繁探测触发风控）"
+                  % ((cooldown - remaining) / 60.0, cooldown // 60))
+            return 0
+
+        limit = None if args.all else args.limit
         try:
             result = test_nodes(
                 cfg.get("api_url") or "http://127.0.0.1:9097",
@@ -1283,34 +1588,38 @@ def cmd_sub(args, cfg: Dict[str, Any]) -> int:
                 test_url=args.test_url or cfg.get("health_check_url")
                          or cfg.get("post_switch_test_url")
                          or "https://www.gstatic.com/generate_204",
-                workers=args.workers)
+                workers=args.workers, limit=limit)
         except Exception as e:
             print("[❌] 节点测试异常: %s" % e)
             return 1
         if not result.get("ok"):
             print("[❌] %s" % result.get("error"))
             return 1
-        print("[✅] 节点测试: %s/%s 健康（共 %s）" % (
-            result["healthy"], result["total"], result["total"]))
+        _record_test(state, result, cooldown=cooldown)
+        print("[✅] 节点测试: %s/%s 健康（样本 %s/%s）" % (
+            result["healthy"], result["total"],
+            result["total"], result.get("available_total")))
         for n in result.get("nodes") or []:
             mark = "✅" if n["healthy"] else "❌"
             print("  %s %-45s %s" % (mark, n["name"][:45], n["delay_ms"] or "-"))
         return 0
 
     if sub == "watch":
-        interval = args.interval or int(cfg.get("subscription_interval") or 21600)
+        interval = args.interval or int(cfg.get("subscription_interval") or 43200)
         if interval < _MIN_WATCH_INTERVAL:
-            logger.warning("[⚠️] 刷新间隔 %ss 过短，机场可能判定为滥用；已提升到 %ss",
+            logger.warning("[⚠️] 巡检间隔 %ss 过短，机场可能判定为滥用；已提升到 %ss",
                            interval, _MIN_WATCH_INTERVAL)
             interval = _MIN_WATCH_INTERVAL
-        elif interval < 21600:
-            logger.warning("[⚠️] 建议订阅刷新间隔 >= 6 小时，避免被机场判定为高频更新")
-        print("[🔁] 订阅定期刷新已启动，间隔 %s 秒（Ctrl+C 停止）" % interval)
+        elif interval < 43200:
+            logger.warning("[⚠️] 建议巡检间隔 >= 12 小时；节点测试也请用抽样，不要全量")
+        do_test = bool(getattr(args, "test", False)) and not args.no_test
+        print("[🔁] 订阅巡检已启动，间隔 %s 秒；节点测试: %s（Ctrl+C 停止）"
+              % (interval, "抽样" if do_test else "关闭"))
         try:
             while True:
                 result = _sync_from_args(args, cfg, write=True,
                                          reload=not args.no_reload,
-                                         test=not args.no_test)
+                                         test=do_test)
                 _print_sync_summary(result)
                 time.sleep(interval)
         except KeyboardInterrupt:

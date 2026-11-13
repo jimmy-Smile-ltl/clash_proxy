@@ -282,6 +282,56 @@ def test_min_interval_skip():
         shutil.rmtree(tmp)
 
 
+def test_update_gate():
+    print("\n=== 订阅更新门控（24h / 12h）===")
+    import clash_subscriptions as cs
+
+    now = 1_800_000_000.0
+    gate = {"last_attempt_at": now - 25 * 3600,
+            "failure_since": now - 13 * 3600}
+    ok, why = cs._gate_allows_fetch(gate, now)
+    check("24h+12h 全失败才允许", ok and not why, f"-> {ok} {why}")
+
+    gate = {"last_attempt_at": now - 23 * 3600,
+            "failure_since": now - 13 * 3600}
+    ok, why = cs._gate_allows_fetch(gate, now)
+    check("24h 内拒绝", not ok and "24" in why, f"-> {why}")
+
+    gate = {"last_attempt_at": now - 25 * 3600,
+            "failure_since": now - 11 * 3600}
+    ok, why = cs._gate_allows_fetch(gate, now)
+    check("失败不足 12h 拒绝", not ok and "12" in why, f"-> {why}")
+
+    gate = {"last_attempt_at": now - 25 * 3600, "failure_since": 0}
+    ok, why = cs._gate_allows_fetch(gate, now)
+    check("未检测到全失败拒绝", not ok, f"-> {why}")
+
+    tmp = tempfile.mkdtemp()
+    try:
+        path = os.path.join(tmp, "gate.json")
+        g = cs._load_gate(path)
+        g = cs._update_gate_health(path, g, {"ok": True, "healthy": 0, "total": 5}, now)
+        check("全失败设置 failure_since", g["failure_since"] == now)
+        g = cs._update_gate_health(path, g, {"ok": True, "healthy": 2, "total": 5}, now + 100)
+        check("有健康节点重置 failure_since", g["failure_since"] == 0)
+    finally:
+        shutil.rmtree(tmp)
+
+
+def test_test_cooldown():
+    print("\n=== 节点测试冷却 ===")
+    import clash_subscriptions as cs
+
+    tmp = tempfile.mkdtemp()
+    try:
+        path = os.path.join(tmp, "last_test.json")
+        check("无记录时冷却为 0", cs._test_cooldown_remaining(path, 3600) == 0)
+        cs._record_test(path, {"total": 5, "available_total": 89, "healthy": 3})
+        check("刚测试后进入冷却", cs._test_cooldown_remaining(path, 3600) > 0)
+    finally:
+        shutil.rmtree(tmp)
+
+
 def test_degraded_response_keeps_cache():
     """机场限流时可能 200 + 只有一个占位节点，不能让坏响应覆盖好缓存。"""
     print("\n=== 异常响应保护（防止被降级订阅清空节点池）===")
@@ -351,6 +401,8 @@ def main():
     test_build_base()
     test_manual_fallback()
     test_min_interval_skip()
+    test_update_gate()
+    test_test_cooldown()
     test_degraded_response_keeps_cache()
     test_write_outputs()
     passed = sum(_ok)

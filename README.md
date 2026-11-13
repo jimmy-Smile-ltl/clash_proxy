@@ -84,10 +84,10 @@ local/subscriptions/extra/
 > 没有 `local/` 目录就新建一个；它已被 `.gitignore` 忽略，不会被提交。
 > 不想手动建文件也可以直接用下面的 `sub add` 命令（会自动创建）。
 
-然后一条命令：**拉取 → 校验 → 去重 → 合并 → 重载 → 测试**：
+然后一条命令：**校验 → 去重 → 合并 → 重载**（门控允许时才拉取订阅，否则用缓存/手动文件）：
 
 ```bash
-python clash_cli.py sub sync --reload --test
+python clash_cli.py sub sync --reload
 ```
 
 > ⚠️ `--reload` 会替换**运行中**的 Clash 配置。日常使用的 Clash 客户端建议先
@@ -98,19 +98,20 @@ python clash_cli.py sub sync --reload --test
 
 ```bash
 python clash_cli.py sub add "https://example.com/api/v1/client/subscribe?token=你的token"
-python clash_cli.py sub sync --reload --test
+python clash_cli.py sub sync --reload
 ```
 
 想定期自动更新：
 
 ```bash
-python clash_cli.py sub watch --interval 21600     # 每 6 小时
+python clash_cli.py sub watch --interval 43200     # 每 12 小时巡检
 ```
 
-> ⚠️ **机场防封**：不要在没跑流量时频繁刷新订阅，部分机场会判定为滥用并封号。
-> 本项目默认同一 URL **1 小时内只拉取一次**（`CLASH_SUBSCRIPTION_MIN_INTERVAL=3600`）；
-> 间隔内重复 `sub sync` 也只读缓存、不发请求。定期刷新建议 **6–12 小时**，
-> `--force` 仅用于调试，不要放进定时任务。
+> ⚠️ **机场防封（严格门控）**：订阅不是「定期刷新」——
+> **24 小时内最多尝试一次订阅拉取，且必须已经连续 12 小时检测到全池失败**；
+> 全池健康时只读缓存/手动文件，不发订阅请求。**没有 `--force`**，
+> 节点全部不可用也不能强制更新订阅。巡检默认不测节点；需要时用
+> `python clash_cli.py sub test --limit 5` 抽样测试。
 
 > 真实订阅 URL / 节点文件只放 `local/`（已被 `.gitignore` 忽略），不要提交到仓库。
 > 详见 [docs/subscriptions.md](docs/subscriptions.md) 与 [docs/private-data.md](docs/private-data.md)。
@@ -118,11 +119,14 @@ python clash_cli.py sub watch --interval 21600     # 每 6 小时
 ### 4. 测试 / 体验（30 秒）
 
 ```bash
-python clash_cli.py test      # API + 代理出口连通性
-python clash_cli.py list      # 查看节点 + 延迟
-python clash_cli.py status    # 当前模式 / 当前节点 / 出口 IP
-python clash_cli.py netcheck  # 逐节点体检（延迟 / 真实出口 IP / 目标站判定）
+python clash_cli.py test             # API + 代理出口连通性
+python clash_cli.py list             # 查看节点 + 延迟
+python clash_cli.py status           # 当前模式 / 当前节点 / 出口 IP
+python clash_cli.py sub test --limit 5  # 只抽样 5 个节点测延迟（1h 冷却）
 ```
+
+> 不要频繁全量测节点：`sub test --all` 会测所有节点（全量冷却 6 小时）；
+> 需要诊断时再用，日常只用抽样。
 
 想直接看效果：
 
@@ -170,7 +174,7 @@ proxies = {
 | `403` 一直失败 | 换策略：`python clash_cli.py switch --strategy least_403` |
 | 切换成功但出口没变 | Clash 在 rule 模式；设 `CLASH_FORCE_GLOBAL_MODE=true` 或切 global |
 | 多订阅同步失败 | 订阅域名可能屏蔽直连；设 `CLASH_SUBSCRIPTION_PROXY=http://127.0.0.1:7897` |
-| 机场提示滥用 / 封号 | 别频繁 `--force` 或缩短刷新间隔；默认 1 小时最小间隔，定期刷新用 6–12 小时 |
+| 机场提示滥用 / 封号 | 订阅更新受严格门控：24h 内最多一次尝试，且需连续 12h 全池失败；没有 `--force`。节点测试默认只抽样 5 个 |
 
 ---
 
@@ -389,8 +393,9 @@ python clash_cli.py priority --block "🇭🇰 香港01" --list          # 拉�
 # 多订阅合并（可选扩展 clash_subscriptions.py，详见 docs/subscriptions.md）
 python clash_cli.py sub list             # 列出来源（URL 自动打码）
 python clash_cli.py sub add <url-or-file>
-python clash_cli.py sub sync --reload --test   # 拉取 → 合并 → 重载 → 测试
-python clash_cli.py sub watch --interval 21600 # 每 6 小时自动刷新
+python clash_cli.py sub sync --reload          # 门控允许时才拉取，否则用缓存
+python clash_cli.py sub test --limit 5         # 抽样测试 5 个节点
+python clash_cli.py sub watch --interval 43200 # 每 12 小时巡检（默认不测节点）
 ```
 
 环境变量可写入项目根目录 `.env` 文件（见 [.env.example](.env.example)）。
@@ -432,7 +437,7 @@ python clash_cli.py sub watch --interval 21600 # 每 6 小时自动刷新
 | `health_check_workers` | `8` | 健康检测并发上限。**别设成节点数**——几十个节点同时打目标站会触发服务端限流 |
 | `health_check_url` | 同 `post_switch_test_url` | 延迟测试/健康检测的探测 URL，默认就是目标站（**不要**改成 gstatic 之类的通用地址） |
 | `health_check_timeout_ms` | `10000` | 延迟测试超时（目标站是重页面时 5s 会误杀好节点） |
-| `startup_health_check` | `true` | 启动时是否全量测延迟。`.env.example` 中默认 `false`（让 `test`/`status` 秒回）；要完整测试用 `health` / `sub test` |
+| `startup_health_check` | `true` | 启动时是否全量测延迟。`.env.example` 中默认 `false`（让 `test`/`status` 秒回）；完整测试用 `health` / `sub test --all`，不要频繁 |
 
 **代理来源（可选扩展 `clash_sources.py`）**
 

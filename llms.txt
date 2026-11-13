@@ -30,7 +30,7 @@ clash_proxy 让你已经付费的机场订阅发挥第二份价值：订阅里�
 - [clash_sources.py](clash_sources.py): 可插拔代理来源 —— Clash 策略组 / 静态代理列表（不经 Clash）/ 多 Clash 实例聚合
 - [clash_policy.py](clash_policy.py): 节点优先度 —— 置顶、拉黑、地区偏好与排除、延迟阈值、流量倍率
 - [clash_probe.py](clash_probe.py): 目标站探针（按业务码判定被封）、逐节点出口 IP、网络体检 `netcheck`
-- [clash_subscriptions.py](clash_subscriptions.py): 多订阅拉取 / 校验 / 合并 / 定期刷新；支持 URL、文件、目录来源，失败回退缓存或手动文件；同一 URL 默认 1 小时最小拉取间隔，防止高频更新被机场判定滥用
+- [clash_subscriptions.py](clash_subscriptions.py): 多订阅拉取 / 校验 / 合并 / 巡检；支持 URL、文件、目录来源，失败回退缓存或手动文件；**订阅更新严格门控**：24h 内最多一次尝试、需连续 12h 全池失败，全池健康只读缓存，无 `--force`；节点测试默认抽样 5 个
   - [docs/subscriptions.md](docs/subscriptions.md): 合并策略、专用实例、定期刷新与节点测试
 
 ## 内部机制与排查

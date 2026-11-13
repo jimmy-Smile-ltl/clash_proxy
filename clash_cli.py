@@ -124,8 +124,13 @@ def get_config():
                                                        "local/subscriptions/merged-proxies.yaml"),
         "subscription_meta_output": os.environ.get("CLASH_SUBSCRIPTION_META_OUT",
                                                     "local/subscriptions/last_sync.json"),
-        "subscription_interval": _env_int("CLASH_SUBSCRIPTION_INTERVAL", 21600),
+        "subscription_interval": _env_int("CLASH_SUBSCRIPTION_INTERVAL", 43200),
         "subscription_min_interval": _env_int("CLASH_SUBSCRIPTION_MIN_INTERVAL", 3600),
+        "subscription_test_cooldown": _env_int("CLASH_NODE_TEST_COOLDOWN", 3600),
+        "subscription_test_state": os.environ.get(
+            "CLASH_SUBSCRIPTION_TEST_STATE", "local/subscriptions/last_test.json"),
+        "subscription_gate_file": os.environ.get(
+            "CLASH_SUBSCRIPTION_GATE_FILE", "local/subscriptions/update_gate.json"),
         "subscription_timeout": _env_int("CLASH_SUBSCRIPTION_TIMEOUT", 30),
         "subscription_ua": os.environ.get("CLASH_SUBSCRIPTION_UA", "clash-verge/v2.0.0"),
         "subscription_proxy": os.environ.get("CLASH_SUBSCRIPTION_PROXY", ""),
@@ -385,6 +390,8 @@ def _add_sub_sync_args(parser):
     parser.add_argument("--min-interval", type=int, default=None,
                         help="同一订阅 URL 的最小拉取间隔（秒）；默认读 "
                              "CLASH_SUBSCRIPTION_MIN_INTERVAL，未设置则 3600")
+    parser.add_argument("--test-limit", type=int, default=5,
+                        help="节点测试抽样数量（默认 5；全量请用 sub test --all）")
 
 
 def main():
@@ -432,19 +439,22 @@ def main():
     _add_sub_sync_args(ss)
     ss.add_argument("--dry-run", action="store_true", help="只解析合并，不写文件")
     ss.add_argument("--reload", action="store_true", help="写入后调用 Clash API 重载")
-    ss.add_argument("--test", action="store_true", help="写入后测试节点延迟")
-    ss.add_argument("--force", action="store_true",
-                    help="忽略最小拉取间隔，强制重新请求订阅（调试用，勿在定时任务里用）")
-    st = subsub.add_parser("test", help="测试当前 Clash 分组里的节点")
+    ss.add_argument("--test", action="store_true", help="写入后抽样测试节点延迟")
+    st = subsub.add_parser("test", help="抽样测试当前 Clash 分组里的节点")
     st.add_argument("--test-url", default="", help="延迟测试 URL")
     st.add_argument("--workers", type=int, default=8, help="并发数")
     st.add_argument("--group", default="", help="策略组名")
     st.add_argument("--secret", default="", help="Clash API secret（默认读 .env）")
-    sw = subsub.add_parser("watch", help="按间隔定期刷新")
+    st.add_argument("--limit", type=int, default=5, help="抽样节点数（默认 5）")
+    st.add_argument("--all", action="store_true", help="测试全部节点（不建议频繁使用）")
+    sw = subsub.add_parser("watch", help="按间隔巡检（默认不测试节点）")
     _add_sub_sync_args(sw)
-    sw.add_argument("--interval", type=int, default=0, help="刷新间隔秒数")
+    sw.add_argument("--interval", type=int, default=0, help="巡检间隔秒数（默认读 .env）")
     sw.add_argument("--no-reload", action="store_true", help="不自动重载 Clash")
-    sw.add_argument("--no-test", action="store_true", help="不自动测试节点")
+    sw.add_argument("--test", action="store_true",
+                    help="巡检时抽样测试节点（默认关闭，减少无谓连接）")
+    sw.add_argument("--no-test", action="store_true",
+                    help="兼容旧参数；当前默认就不测试节点")
 
     args = parser.parse_args()
     if not args.command:
