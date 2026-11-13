@@ -125,6 +125,7 @@ def get_config():
         "subscription_meta_output": os.environ.get("CLASH_SUBSCRIPTION_META_OUT",
                                                     "local/subscriptions/last_sync.json"),
         "subscription_interval": _env_int("CLASH_SUBSCRIPTION_INTERVAL", 21600),
+        "subscription_min_interval": _env_int("CLASH_SUBSCRIPTION_MIN_INTERVAL", 3600),
         "subscription_timeout": _env_int("CLASH_SUBSCRIPTION_TIMEOUT", 30),
         "subscription_ua": os.environ.get("CLASH_SUBSCRIPTION_UA", "clash-verge/v2.0.0"),
         "subscription_proxy": os.environ.get("CLASH_SUBSCRIPTION_PROXY", ""),
@@ -381,6 +382,9 @@ def _add_sub_sync_args(parser):
     parser.add_argument("--secret", default="", help="写入配置的 API secret（可选）")
     parser.add_argument("--test-url", default="", help="节点测试 URL")
     parser.add_argument("--workers", type=int, default=8, help="节点测试并发数")
+    parser.add_argument("--min-interval", type=int, default=None,
+                        help="同一订阅 URL 的最小拉取间隔（秒）；默认读 "
+                             "CLASH_SUBSCRIPTION_MIN_INTERVAL，未设置则 3600")
 
 
 def main():
@@ -429,6 +433,8 @@ def main():
     ss.add_argument("--dry-run", action="store_true", help="只解析合并，不写文件")
     ss.add_argument("--reload", action="store_true", help="写入后调用 Clash API 重载")
     ss.add_argument("--test", action="store_true", help="写入后测试节点延迟")
+    ss.add_argument("--force", action="store_true",
+                    help="忽略最小拉取间隔，强制重新请求订阅（调试用，勿在定时任务里用）")
     st = subsub.add_parser("test", help="测试当前 Clash 分组里的节点")
     st.add_argument("--test-url", default="", help="延迟测试 URL")
     st.add_argument("--workers", type=int, default=8, help="并发数")

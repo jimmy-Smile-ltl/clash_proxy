@@ -20,6 +20,7 @@ import pathlib
 import shutil
 import sys
 import tempfile
+import time
 
 sys.stdout.reconfigure(encoding="utf-8", errors="replace")
 ROOT = pathlib.Path(__file__).resolve().parent.parent
@@ -238,6 +239,90 @@ def test_manual_fallback():
         shutil.rmtree(tmp)
 
 
+def test_min_interval_skip():
+    print("\n=== 订阅最小拉取间隔（防机场滥用）===")
+    import clash_subscriptions as cs
+
+    tmp = tempfile.mkdtemp()
+    try:
+        cache_dir = os.path.join(tmp, "cache")
+        os.makedirs(cache_dir)
+        url = "http://127.0.0.1:1/sub?token=example"
+        raw, meta, _ = cs._cache_paths(cache_dir, url)
+        with open(raw, "w", encoding="utf-8") as f:
+            f.write("proxies:\n  - {name: A, type: ss, server: 1.1.1.1, port: 1}\n")
+        with open(meta, "w", encoding="utf-8") as f:
+            json.dump({"fetched_at": time.time()}, f)
+
+        spec = SourceSpec(raw=url, kind="url", label="test", url=url)
+        calls = []
+
+        def fake_get(u, timeout, ua, proxy=None):
+            calls.append(u)
+            return ("proxies:\n"
+                    "  - {name: B, type: ss, server: 2.2.2.2, port: 2}\n"
+                    "  - {name: C, type: ss, server: 3.3.3.3, port: 3}\n"), "text/plain"
+
+        old = cs._http_get
+        cs._http_get = fake_get
+        try:
+            text, from_cache, note, _ = cs.fetch_source(
+                spec, cache_dir, min_interval=3600)
+            check("间隔内直接使用缓存，不发请求",
+                  bool(text) and from_cache and not calls, f"-> calls={len(calls)}")
+            check("提示包含「跳过」", "跳过" in note, f"-> {note[:36]}")
+
+            text2, from_cache2, _, _ = cs.fetch_source(
+                spec, cache_dir, min_interval=3600, force=True)
+            check("--force 会强制重新拉取",
+                  (not from_cache2) and len(calls) == 1, f"-> calls={len(calls)}")
+        finally:
+            cs._http_get = old
+    finally:
+        shutil.rmtree(tmp)
+
+
+def test_degraded_response_keeps_cache():
+    """机场限流时可能 200 + 只有一个占位节点，不能让坏响应覆盖好缓存。"""
+    print("\n=== 异常响应保护（防止被降级订阅清空节点池）===")
+    import clash_subscriptions as cs
+
+    tmp = tempfile.mkdtemp()
+    try:
+        cache_dir = os.path.join(tmp, "cache")
+        os.makedirs(cache_dir)
+        url = "http://127.0.0.1:1/sub?token=example"
+        raw, meta, _ = cs._cache_paths(cache_dir, url)
+        good = ("proxies:\n"
+                "  - {name: A, type: ss, server: 1.1.1.1, port: 1}\n"
+                "  - {name: B, type: ss, server: 2.2.2.2, port: 2}\n"
+                "  - {name: C, type: ss, server: 3.3.3.3, port: 3}\n")
+        with open(raw, "w", encoding="utf-8") as f:
+            f.write(good)
+        with open(meta, "w", encoding="utf-8") as f:
+            json.dump({"fetched_at": time.time()}, f)
+
+        spec = SourceSpec(raw=url, kind="url", label="test", url=url)
+        bad = ("proxies:\n"
+               "  - {name: '剩余流量：1TB', type: ss, server: 9.9.9.9, "
+               "port: 443, cipher: aes-256-gcm, password: pass}\n")
+
+        old_get = cs._http_get
+        cs._http_get = lambda u, timeout, ua, proxy=None: (bad, "text/plain")
+        try:
+            text, from_cache, note, _ = cs.fetch_source(
+                spec, cache_dir, min_interval=0, force=True)
+            check("坏响应被识别并回退缓存", from_cache and "有效节点" in note,
+                  f"-> {note[:40]}")
+            check("好缓存没有被覆盖",
+                  cs._count_valid_proxies(cs._read_text_file(raw)) == 3,
+                  f"-> {cs._count_valid_proxies(cs._read_text_file(raw))}")
+        finally:
+            cs._http_get = old_get
+    finally:
+        shutil.rmtree(tmp)
+
+
 def test_write_outputs():
     print("\n=== 输出写入 ===")
     tmp = tempfile.mkdtemp()
@@ -265,6 +350,8 @@ def main():
     test_build_template()
     test_build_base()
     test_manual_fallback()
+    test_min_interval_skip()
+    test_degraded_response_keeps_cache()
     test_write_outputs()
     passed = sum(_ok)
     print(f"\n===== {passed}/{len(_ok)} 项通过 =====")

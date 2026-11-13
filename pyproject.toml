@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "clash-proxy"
-version = "2.1.0"
+version = "2.1.1"
 description = "Turn your unused Clash/Mihomo airport nodes into a rotating proxy pool for web scraping — auto health-check, auto-rotate, auto-recover. 把机场订阅里吃灰的节点管成爬虫代理池。"
 readme = "README.md"
 requires-python = ">=3.8"

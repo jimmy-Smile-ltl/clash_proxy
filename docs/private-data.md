@@ -15,7 +15,7 @@
 | 数据 | 常见文件 | 泄露后果 |
 |---|---|---|
 | 机场订阅配置 | `config/config.yaml`、`sub*.yaml`、`*.clash.yaml` | 别人可直接消耗你的流量 |
-| 多订阅来源列表 | `local/subscriptions.txt` | 订阅 token 泄露即被白嫖 |
+| 多订阅来源列表 | `local/subscriptions.txt` | 订阅 token 泄露即被白嫖；别人高频拉取还可能连累你的账号被机场判定滥用而封禁 |
 | 订阅拉取缓存 / 手动文件 | `local/subscriptions/cache/`、`manual/` | 含真实节点凭据 |
 | 合并结果 / 专用实例配置 | `config/config.yaml`、`local/mihomo/config.yaml` | 含全部节点与 API secret |
 | 静态节点列表 | `proxies.txt`、`nodes.txt` | 节点 / 账号被白嫖 |

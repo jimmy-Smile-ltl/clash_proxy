@@ -107,6 +107,11 @@ python clash_cli.py sub sync --reload --test
 python clash_cli.py sub watch --interval 21600     # 每 6 小时
 ```
 
+> ⚠️ **机场防封**：不要在没跑流量时频繁刷新订阅，部分机场会判定为滥用并封号。
+> 本项目默认同一 URL **1 小时内只拉取一次**（`CLASH_SUBSCRIPTION_MIN_INTERVAL=3600`）；
+> 间隔内重复 `sub sync` 也只读缓存、不发请求。定期刷新建议 **6–12 小时**，
+> `--force` 仅用于调试，不要放进定时任务。
+
 > 真实订阅 URL / 节点文件只放 `local/`（已被 `.gitignore` 忽略），不要提交到仓库。
 > 详见 [docs/subscriptions.md](docs/subscriptions.md) 与 [docs/private-data.md](docs/private-data.md)。
 
@@ -165,6 +170,7 @@ proxies = {
 | `403` 一直失败 | 换策略：`python clash_cli.py switch --strategy least_403` |
 | 切换成功但出口没变 | Clash 在 rule 模式；设 `CLASH_FORCE_GLOBAL_MODE=true` 或切 global |
 | 多订阅同步失败 | 订阅域名可能屏蔽直连；设 `CLASH_SUBSCRIPTION_PROXY=http://127.0.0.1:7897` |
+| 机场提示滥用 / 封号 | 别频繁 `--force` 或缩短刷新间隔；默认 1 小时最小间隔，定期刷新用 6–12 小时 |
 
 ---
 

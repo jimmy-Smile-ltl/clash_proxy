@@ -79,6 +79,10 @@ python scripts/check_privacy.py --all
 **加一种订阅格式 / 合并规则** → 改 `clash_subscriptions.py` 的 `parse_subscription()`
 或 `_valid_proxy()`。⚠️ 真实订阅内容只能出现在 `local/` 或 `.env`；
 新增日志必须先 `mask_source()`，不要把含 token 的 URL 打出来。
+⚠️ 不要降低订阅刷新频率：默认同一 URL 最小拉取间隔 3600s、`sub watch` 下限 1800s；
+机场会把「高频更新（尤其没跑流量）」判定为滥用并封号。`--force` 只允许调试使用。
+⚠️ 不要绕过缓存质量校验：机场限流时可能返回 HTTP 200 但只有 1 个占位节点；
+`_count_valid_proxies()` 会在有效节点为 0 / 骤降 50% 时保留旧缓存或手动文件。
 
 **改状态持久化** → `save_state()` 对计数器用单调 `max()` 合并（多进程安全）。
 ⚠️ 但**标志位/权重不能用 max 合并**，否则跨进程永远取消不掉置顶。

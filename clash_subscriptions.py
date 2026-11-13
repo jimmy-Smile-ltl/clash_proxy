@@ -103,6 +103,9 @@ _SPECIAL_GROUP_ENTRIES = {
 
 _SUPPORTED_FILE_EXT = (".yaml", ".yml", ".json", ".txt")
 
+# 定期刷新下限（秒）。低于 30 分钟极易触发机场「高频更新」滥用风控。
+_MIN_WATCH_INTERVAL = 1800
+
 # 服务器地址明显是本地/占位时跳过
 _LOCAL_SERVERS = {"127.0.0.1", "localhost", "0.0.0.0", "::1", "[::1]"}
 
@@ -303,10 +306,60 @@ def _cache_paths(cache_dir: str, source: str) -> Tuple[str, str, str]:
     return raw, meta, manual
 
 
+def _read_text_file(path: str) -> str:
+    try:
+        with open(path, "r", encoding="utf-8", errors="replace") as f:
+            return f.read()
+    except OSError:
+        return ""
+
+
+def _count_valid_proxies(text: str) -> int:
+    """统计文本里真正可用的节点数。
+
+    用来识别机场的异常响应：有些机场在判定滥用/限流时仍返回 HTTP 200，
+    但内容只有一个「剩余流量 / 套餐到期」之类的占位节点。把这种响应当成
+    成功并覆盖缓存，会把好好的节点池清空。
+    """
+    if not text or not text.strip():
+        return 0
+    try:
+        _, proxies, _, _ = parse_subscription(text)
+    except Exception:
+        return 0
+    count = 0
+    for proxy in proxies:
+        clean, _ = _valid_proxy(proxy)
+        if clean is not None:
+            count += 1
+    return count
+
+
+def _cache_age(cache_raw: str, cache_meta: str) -> Optional[float]:
+    """返回缓存距上次成功拉取的秒数；无法判断返回 None。"""
+    try:
+        if os.path.isfile(cache_meta):
+            with open(cache_meta, "r", encoding="utf-8") as f:
+                meta = json.load(f) or {}
+            ts = float(meta.get("fetched_at") or 0)
+            if ts > 0:
+                return max(0.0, time.time() - ts)
+        if os.path.isfile(cache_raw):
+            return max(0.0, time.time() - os.path.getmtime(cache_raw))
+    except Exception:
+        pass
+    return None
+
+
 def fetch_source(spec: SourceSpec, cache_dir: str, timeout: int = 30,
                  ua: str = "clash-verge/v2.0.0",
-                 proxy: str = "") -> Tuple[Optional[str], bool, str, str]:
+                 proxy: str = "", min_interval: int = 0,
+                 force: bool = False) -> Tuple[Optional[str], bool, str, str]:
     """读取一个来源。
+
+    :param min_interval: 同一个 URL 的最小拉取间隔（秒）。缓存未过期时
+        直接返回缓存、**不发网络请求**，防止高频拉取订阅被机场判定滥用。
+    :param force: True = 忽略最小间隔，强制重新拉取（调试用）。
 
     :return: ``(text, from_cache, note, cache_path)``；失败时 text=None。
     """
@@ -323,13 +376,49 @@ def fetch_source(spec: SourceSpec, cache_dir: str, timeout: int = 30,
     os.makedirs(cache_dir, exist_ok=True)
     cache_raw, cache_meta, manual = _cache_paths(cache_dir, spec.url or spec.raw)
 
+    # 机场防滥用：同一 URL 在 min_interval 内只成功拉取一次。
+    # 这里必须**直接返回缓存、不发请求**——即使 sub sync 被频繁调用，
+    # 也不会让机场看到高频订阅请求（"未跑流量时频繁更新订阅"是常见封号原因）。
+    if not force and min_interval > 0:
+        age = _cache_age(cache_raw, cache_meta)
+        if age is not None and age < min_interval:
+            text = _read_text_file(cache_raw)
+            if text.strip():
+                valid = _count_valid_proxies(text)
+                if valid > 0:
+                    note = ("距上次成功拉取 %.1f 分钟，未超过最小间隔 %s 分钟，"
+                            "跳过网络请求（使用缓存；--force 可强制）"
+                            % (age / 60.0, int(min_interval / 60)))
+                    logger.info("[⏳] %s %s", spec.label, note)
+                    return text, True, note, cache_raw
+                logger.warning("[⚠️] %s 缓存中没有有效节点，忽略最小间隔，重新拉取",
+                               spec.label)
+
     attempts = [None]
     if proxy:
         attempts = [None, proxy]
+
+    # 旧缓存 / 手动文件作为「质量基线」：机场在限流/风控时可能返回
+    # HTTP 200 但只有一个占位节点的订阅，不能让它覆盖正常缓存。
+    old_cache_text = _read_text_file(cache_raw)
+    old_cache_valid = _count_valid_proxies(old_cache_text)
+    manual_text = _read_text_file(manual)
+    manual_valid = _count_valid_proxies(manual_text)
+    baseline_valid = max(old_cache_valid, manual_valid)
+
     errors: List[str] = []
     for attempt in attempts:
+        label = "直连" if attempt is None else "代理"
         try:
             text, ctype = _http_get(spec.url or spec.raw, timeout, ua, attempt)
+            new_valid = _count_valid_proxies(text)
+            if new_valid == 0:
+                errors.append("%s: 返回 0 个有效节点（疑似被限流/滥用警告页）" % label)
+                continue
+            if baseline_valid >= 3 and new_valid < max(1, baseline_valid // 2):
+                errors.append("%s: 有效节点从 %s 降到 %s（疑似被降级/限流）"
+                              % (label, baseline_valid, new_valid))
+                continue
             os.makedirs(cache_dir, exist_ok=True)
             with open(cache_raw, "w", encoding="utf-8") as f:
                 f.write(text)
@@ -340,38 +429,41 @@ def fetch_source(spec: SourceSpec, cache_dir: str, timeout: int = 30,
                     "fetched_at": time.time(),
                     "content_type": ctype,
                     "size": len(text),
+                    "valid_proxies": new_valid,
                     "via_proxy": bool(attempt),
                 }, f, ensure_ascii=False, indent=2)
             return text, False, "", cache_raw
         except Exception as e:
-            errors.append("%s%s" % ("直连" if attempt is None else "代理",
-                                    ": %s" % e))
+            errors.append("%s: %s" % (label, e))
 
-    # 失败回退：缓存 / 手动文件，取较新的那个
+    # 失败回退：在缓存 / 手动文件里优先选「真正有有效节点」的，取较新的
     candidates = []
     for path, label in ((cache_raw, "缓存"), (manual, "手动文件")):
-        if os.path.isfile(path):
-            try:
-                candidates.append((os.path.getmtime(path), path, label))
-            except OSError:
-                pass
-    if candidates:
-        candidates.sort(reverse=True)
-        mtime, path, label = candidates[0]
+        if not os.path.isfile(path):
+            continue
         try:
-            with open(path, "r", encoding="utf-8", errors="replace") as f:
-                text = f.read()
-            age = max(0, time.time() - mtime)
-            note = "%s（%s，%.1f 小时前）" % ("; ".join(errors), label, age / 3600)
-            logger.warning("[⚠️] %s 拉取失败(%s)，使用%s: %s",
-                           spec.label, "; ".join(errors), label, path)
-            return text, True, note, path
+            text = _read_text_file(path)
+            valid = _count_valid_proxies(text)
+            candidates.append((valid, os.path.getmtime(path), path, label, text))
         except OSError:
             pass
 
-    # 都没有：告诉用户手动文件的准确路径
+    valid_candidates = [c for c in candidates if c[0] > 0]
+    pool = valid_candidates or candidates
+    if pool:
+        pool.sort(key=lambda x: x[1], reverse=True)
+        valid, mtime, path, label, text = pool[0]
+        if valid > 0:
+            age = max(0, time.time() - mtime)
+            note = "%s（%s，%.1f 小时前，%s 个有效节点）" % (
+                "; ".join(errors), label, age / 3600, valid)
+            logger.warning("[⚠️] %s 拉取失败/响应异常(%s)，使用%s: %s（%s 个有效节点）",
+                           spec.label, "; ".join(errors), label, path, valid)
+            return text, True, note, path
+
+    # 没有有效回退：告诉用户手动文件的准确路径
     os.makedirs(os.path.dirname(manual), exist_ok=True)
-    msg = ("%s。没有可用缓存。请手动复制订阅内容保存到 %s，"
+    msg = ("%s。没有可用的有效缓存/手动文件。请手动复制订阅内容保存到 %s，"
            "然后重新运行（无需修改来源列表）" % ("; ".join(errors), manual))
     return None, False, msg, ""
 
@@ -956,8 +1048,14 @@ def sync(cfg: Dict[str, Any], allow_partial: bool = False,
          workers: int = 8, base: str = "", mode: str = "",
          group: str = "", out: str = "", template: str = "",
          api_listen: str = "", mixed_port: str = "",
-         secret: str = "", timeout: int = 0) -> Dict[str, Any]:
-    """执行一次完整同步：拉取 → 解析 → 合并 → 写配置 →（可选）重载/测试。"""
+         secret: str = "", timeout: int = 0,
+         force: bool = False,
+         min_interval: Optional[int] = None) -> Dict[str, Any]:
+    """执行一次完整同步：拉取 → 解析 → 合并 → 写配置 →（可选）重载/测试。
+
+    :param force: 忽略订阅最小拉取间隔，强制重新请求（调试用）。
+    :param min_interval: 同一 URL 最小拉取间隔（秒）；None = 读配置，默认 3600。
+    """
     paths = _default_paths(cfg)
     if base:
         paths["base"] = base
@@ -975,6 +1073,9 @@ def sync(cfg: Dict[str, Any], allow_partial: bool = False,
     mixed_port = mixed_port or cfg.get("subscription_mixed_port") or ""
     secret = secret or cfg.get("subscription_secret") or ""
 
+    if min_interval is None:
+        min_interval = int(cfg.get("subscription_min_interval", 3600))
+
     timeout = timeout or int(cfg.get("subscription_timeout") or 30)
     specs = load_sources(paths["manifest"])
     if not specs:
@@ -985,7 +1086,8 @@ def sync(cfg: Dict[str, Any], allow_partial: bool = False,
     for spec in specs:
         text, from_cache, note, cache_path = fetch_source(
             spec, paths["cache_dir"], timeout=timeout,
-            ua=paths["ua"], proxy=paths["proxy"])
+            ua=paths["ua"], proxy=paths["proxy"],
+            min_interval=min_interval, force=force)
         if text is None:
             parsed_sources.append(ParsedSource(spec=spec, ok=False, error=note))
             failures.append("%s: %s" % (spec.label, note))
@@ -1035,6 +1137,8 @@ def sync(cfg: Dict[str, Any], allow_partial: bool = False,
         "failures": failures,
         "config": paths["out"],
         "proxies": paths["proxies_out"],
+        "min_interval": min_interval,
+        "force": bool(force),
     }
 
     if write:
@@ -1140,6 +1244,8 @@ def _sync_from_args(args, cfg: Dict[str, Any], write: bool,
             api_listen=args.api_listen,
             mixed_port=args.mixed_port,
             secret=args.secret,
+            force=getattr(args, "force", False),
+            min_interval=args.min_interval,
         )
     except Exception as e:
         logger.error("[‼] 同步异常: %s", e)
@@ -1193,6 +1299,12 @@ def cmd_sub(args, cfg: Dict[str, Any]) -> int:
 
     if sub == "watch":
         interval = args.interval or int(cfg.get("subscription_interval") or 21600)
+        if interval < _MIN_WATCH_INTERVAL:
+            logger.warning("[⚠️] 刷新间隔 %ss 过短，机场可能判定为滥用；已提升到 %ss",
+                           interval, _MIN_WATCH_INTERVAL)
+            interval = _MIN_WATCH_INTERVAL
+        elif interval < 21600:
+            logger.warning("[⚠️] 建议订阅刷新间隔 >= 6 小时，避免被机场判定为高频更新")
         print("[🔁] 订阅定期刷新已启动，间隔 %s 秒（Ctrl+C 停止）" % interval)
         try:
             while True:

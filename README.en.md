@@ -102,6 +102,13 @@ Scheduled refresh:
 python clash_cli.py sub watch --interval 21600     # every 6 hours
 ```
 
+> ⚠️ **Airport anti-abuse**: do not refresh subscriptions frequently, especially
+> without real traffic — some airports treat it as abuse and ban the account.
+> This project fetches the same URL **at most once per hour**
+> (`CLASH_SUBSCRIPTION_MIN_INTERVAL=3600`); repeated `sub sync` calls inside the
+> window use the cache and send no request. Prefer **6–12 hours** for scheduled
+> refresh; `--force` is for debugging only, never in cron.
+
 > Keep real subscription URLs/files in `local/` (git-ignored).
 > See [docs/subscriptions.md](docs/subscriptions.md) and
 > [docs/private-data.md](docs/private-data.md).
@@ -158,6 +165,7 @@ proxies = {
 | Constant `403`s | `python clash_cli.py switch --strategy least_403` |
 | Switch succeeds but exit IP does not change | Clash is in rule mode; set `CLASH_FORCE_GLOBAL_MODE=true` or switch to global |
 | Subscription sync fails | The subscription host may block direct access; set `CLASH_SUBSCRIPTION_PROXY=http://127.0.0.1:7897` |
+| Airport warns about abuse / bans the account | Do not spam `--force` or shorten the watch interval; default min fetch interval is 1 hour, scheduled refresh 6–12 hours |
 
 ---
 
